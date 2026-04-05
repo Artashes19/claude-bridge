@@ -91,3 +91,17 @@ test("writeJobRecord, readJobRecord, updateJobRecord, and listJobRecords round-t
   assert.equal(jobs[1].id, olderJob.id);
   assert.equal(resolveJobRecord({ jobsDir: paths.jobsDir, jobIdOrLatest: "latest" }).id, newerJob.id);
 });
+
+test("resolveJobRecord throws when latest is requested and no jobs exist", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-jobs-empty-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  assert.throws(
+    () => resolveJobRecord({ jobsDir: paths.jobsDir, jobIdOrLatest: "latest" }),
+    /No job found for specifier latest/
+  );
+});
