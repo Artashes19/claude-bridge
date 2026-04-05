@@ -42,6 +42,7 @@ test("resolvePaths returns repo-local state directories", () => {
   assert.equal(paths.jobsDir, path.join(repoRoot, ".claude-bridge", "jobs"));
   assert.equal(paths.outputDir, path.join(repoRoot, ".claude-bridge", "output"));
   assert.equal(paths.repoConfigPath, path.join(repoRoot, ".claude-bridge", "config.json"));
+  assert.equal(paths.globalConfigPath, path.join(tempRoot, "home", ".claude-bridge", "config.json"));
 });
 
 test("writeJobRecord, readJobRecord, updateJobRecord, and listJobRecords round-trip JSON state", () => {
@@ -52,30 +53,41 @@ test("writeJobRecord, readJobRecord, updateJobRecord, and listJobRecords round-t
   const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
   ensureStateDirs(paths);
 
-  const job = createJobRecord({
+  const olderJob = createJobRecord({
     kind: "review",
     cwd: repoRoot,
-    summary: "Review current changes",
+    summary: "Review older changes",
     model: "claude-opus-latest"
   });
+  olderJob.createdAt = "2024-01-01T00:00:00.000Z";
 
-  writeJobRecord({ jobsDir: paths.jobsDir, job });
+  const newerJob = createJobRecord({
+    kind: "review",
+    cwd: repoRoot,
+    summary: "Review newer changes",
+    model: "claude-opus-latest"
+  });
+  newerJob.createdAt = "2024-01-02T00:00:00.000Z";
 
-  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
-  assert.equal(stored.summary, "Review current changes");
+  writeJobRecord({ jobsDir: paths.jobsDir, job: newerJob });
+  writeJobRecord({ jobsDir: paths.jobsDir, job: olderJob });
+
+  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: newerJob.id });
+  assert.equal(stored.summary, "Review newer changes");
   assert.equal(stored.status, "queued");
 
   updateJobRecord({
     jobsDir: paths.jobsDir,
-    jobId: job.id,
-    patch: { status: "completed", outputFile: path.join(paths.outputDir, `${job.id}.txt`) }
+    jobId: newerJob.id,
+    patch: { status: "completed", outputFile: path.join(paths.outputDir, `${newerJob.id}.txt`) }
   });
 
-  const updated = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+  const updated = readJobRecord({ jobsDir: paths.jobsDir, jobId: newerJob.id });
   assert.equal(updated.status, "completed");
 
   const jobs = listJobRecords({ jobsDir: paths.jobsDir });
-  assert.equal(jobs.length, 1);
-  assert.equal(jobs[0].id, job.id);
-  assert.equal(resolveJobRecord({ jobsDir: paths.jobsDir, jobIdOrLatest: "latest" }).id, job.id);
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].id, newerJob.id);
+  assert.equal(jobs[1].id, olderJob.id);
+  assert.equal(resolveJobRecord({ jobsDir: paths.jobsDir, jobIdOrLatest: "latest" }).id, newerJob.id);
 });
