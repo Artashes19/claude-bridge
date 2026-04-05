@@ -105,3 +105,52 @@ test("resolveJobRecord throws when latest is requested and no jobs exist", () =>
     /No job found for specifier latest/
   );
 });
+
+test("ensureStateDirs creates jobs and output directories", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-dirs-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  assert.equal(fs.existsSync(paths.jobsDir), true);
+  assert.equal(fs.existsSync(paths.outputDir), true);
+});
+
+test("updateJobRecord preserves identity fields and keeps a single stored record", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-jobs-identity-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  const job = createJobRecord({
+    kind: "review",
+    cwd: repoRoot,
+    summary: "Protect identity fields",
+    model: "claude-opus-latest"
+  });
+  writeJobRecord({ jobsDir: paths.jobsDir, job });
+
+  updateJobRecord({
+    jobsDir: paths.jobsDir,
+    jobId: job.id,
+    patch: {
+      id: "tampered-id",
+      createdAt: "2000-01-01T00:00:00.000Z",
+      status: "completed"
+    }
+  });
+
+  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+  assert.equal(stored.id, job.id);
+  assert.equal(stored.createdAt, job.createdAt);
+  assert.equal(stored.status, "completed");
+  assert.equal(listJobRecords({ jobsDir: paths.jobsDir }).length, 1);
+  assert.deepEqual(
+    fs.readdirSync(paths.jobsDir).filter((entry) => entry.endsWith(".json")),
+    [`${job.id}.json`]
+  );
+});

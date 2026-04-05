@@ -36,7 +36,7 @@ export function readJobRecord({ jobsDir, jobId }) {
 
 export function updateJobRecord({ jobsDir, jobId, patch }) {
   const current = readJobRecord({ jobsDir, jobId });
-  const updated = { ...current, ...patch };
+  const updated = { ...current, ...patch, id: current.id, createdAt: current.createdAt };
   writeJobRecord({ jobsDir, job: updated });
   return updated;
 }
