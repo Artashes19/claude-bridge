@@ -27,17 +27,24 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
    git clone https://github.com/Artashes19/claude-bridge.git
    ```
 
-2. Copy the plugin payload into your home plugin directory:
+2. Change into the cloned repository:
+
+   ```bash
+   cd claude-bridge
+   ```
+
+3. Copy the plugin payload into your home plugin directory:
 
    ```bash
    mkdir -p ~/plugins
    rsync -a ./plugins/claude-bridge/ ~/plugins/claude-bridge/
    ```
 
-3. Add the marketplace entry from `.agents/plugins/marketplace.json` into `~/.agents/plugins/marketplace.json`.
+4. Add the marketplace entry from `.agents/plugins/marketplace.json` into `~/.agents/plugins/marketplace.json`.
    If the file does not exist yet, create it with the `claude-bridge` entry and `./plugins/claude-bridge` source path.
+   In `~/.agents/plugins/marketplace.json`, `"./plugins/claude-bridge" resolves to ~/plugins/claude-bridge`.
 
-4. Restart Codex and verify the plugin with:
+5. Restart Codex and verify the plugin with:
 
    ```bash
    node ~/plugins/claude-bridge/scripts/claude-bridge.mjs setup --cwd "$PWD"

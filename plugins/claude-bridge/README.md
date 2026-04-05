@@ -12,6 +12,8 @@ Claude Bridge is a Codex plugin that shells out to the local `claude` CLI for:
 - Repo-local state: `.claude-bridge/`
 - Repo-local config: `.claude-bridge/config.json`
 - Global config: `~/.claude-bridge/config.json`
+- These examples assume the plugin has been installed to ~/plugins/claude-bridge.
+- In `~/.agents/plugins/marketplace.json`, `./plugins/claude-bridge` resolves to `~/plugins/claude-bridge`.
 
 ## Commands Behind The Skills
 
