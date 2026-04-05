@@ -13,6 +13,11 @@ import { buildReviewInput as defaultBuildReviewInput } from "./lib/git.mjs";
 import { listJobRecords, readJobRecord, resolveJobRecord, updateJobRecord } from "./lib/jobs.mjs";
 import { resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
 import {
+  enqueueDelegateJob,
+  prepareDelegateJob,
+  runPreparedDelegateJob
+} from "./lib/delegate.mjs";
+import {
   enqueueReviewJob,
   prepareReviewJob,
   runPreparedReviewJob
@@ -172,11 +177,65 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
   writeLine(stdio, result.stdout);
 }
 
+async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps }) {
+  ensureStateDirs(paths);
+
+  const job = prepareDelegateJob({
+    cwd,
+    paths,
+    config,
+    requestedModel: parsed.options.model,
+    requestedEffort: parsed.options.effort,
+    taskText: parsed.positionals.join(" ").trim(),
+    resumeSpecifier: parsed.options.resume ?? null
+  });
+
+  job.request.binary = binary;
+  enqueueDelegateJob({ jobsDir: paths.jobsDir, job });
+
+  if (parsed.options.background) {
+    const child = deps.spawnDetachedWorker({
+      nodeBinary: process.execPath,
+      scriptPath: SCRIPT_PATH,
+      workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
+      cwd
+    });
+
+    updateJobRecord({
+      jobsDir: paths.jobsDir,
+      jobId: job.id,
+      patch: { pid: child.pid }
+    });
+
+    writeLine(stdio, `Started delegate job ${job.id}`);
+    return;
+  }
+
+  const result = runPreparedDelegateJob({
+    job,
+    binary,
+    paths,
+    runClaudeForeground: deps.runClaudeForeground
+  });
+
+  writeLine(stdio, result.stdout);
+}
+
 async function handleWorker({ paths, jobId, deps }) {
   const job = readJobRecord({ jobsDir: paths.jobsDir, jobId });
 
   if (job.kind === "review") {
     runPreparedReviewJob({
+      job,
+      binary: job.request.binary,
+      paths,
+      runClaudeForeground: deps.runClaudeForeground
+    });
+    return;
+  }
+
+  if (job.kind === "delegate") {
+    runPreparedDelegateJob({
       job,
       binary: job.request.binary,
       paths,
@@ -225,6 +284,8 @@ export async function main(argv, injected = {}) {
       });
     case "review":
       return handleReview({ parsed, cwd, paths, config, binary, stdio, deps });
+    case "delegate":
+      return handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps });
     case "worker":
       return handleWorker({
         paths,
