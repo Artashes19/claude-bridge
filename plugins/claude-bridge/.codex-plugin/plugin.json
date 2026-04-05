@@ -1,0 +1,28 @@
+{
+  "name": "claude-bridge",
+  "version": "0.1.0",
+  "description": "Run local Claude Code review and delegation flows from Codex.",
+  "author": {
+    "name": "Artashes Mkrtchyan"
+  },
+  "repository": "https://github.com/Artashes19/claude-bridge",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Bridge",
+    "shortDescription": "Use Claude Code from inside Codex",
+    "longDescription": "Read-only Claude reviews, writable Claude delegation, and lightweight local job tracking for Codex users.",
+    "developerName": "Artashes Mkrtchyan",
+    "category": "Coding",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/Artashes19/claude-bridge",
+    "privacyPolicyURL": "https://github.com/Artashes19/claude-bridge",
+    "termsOfServiceURL": "https://github.com/Artashes19/claude-bridge",
+    "defaultPrompt": [
+      "Use Claude to review my current changes",
+      "Delegate this bugfix to Claude with Sonnet",
+      "Show the latest Claude Bridge result"
+    ],
+    "brandColor": "#D97706"
+  }
+}
