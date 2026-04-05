@@ -2,21 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-test("bootstrap directories contain tracked placeholders", () => {
-  const expectedPlaceholderPaths = [
-    "plugins/claude-bridge/prompts/.gitkeep",
-    "plugins/claude-bridge/schemas/.gitkeep",
-    "plugins/claude-bridge/skills/.gitkeep",
-    "plugins/claude-bridge/.codex-plugin/.gitkeep",
-    ".agents/plugins/.gitkeep"
+test("bootstrap directories exist after checkout", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const expectedDirectories = [
+    "plugins/claude-bridge/prompts",
+    "plugins/claude-bridge/schemas",
+    "plugins/claude-bridge/skills",
+    "plugins/claude-bridge/.codex-plugin",
+    ".agents/plugins"
   ];
 
-  for (const relativePath of expectedPlaceholderPaths) {
+  for (const relativePath of expectedDirectories) {
+    const absolutePath = path.join(repoRoot, relativePath);
     assert.equal(
-      fs.existsSync(path.resolve(relativePath)),
+      fs.statSync(absolutePath).isDirectory(),
       true,
-      `missing placeholder: ${relativePath}`
+      `missing directory: ${relativePath}`
     );
   }
 });
