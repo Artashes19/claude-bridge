@@ -6,6 +6,25 @@ function jobPath(jobsDir, jobId) {
   return path.join(jobsDir, `${jobId}.json`);
 }
 
+function writeJsonAtomically(filePath, json) {
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+
+  try {
+    fs.writeFileSync(tempPath, json);
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    if (fs.existsSync(tempPath)) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        // Ignore cleanup errors; the original failure is the important one.
+      }
+    }
+
+    throw error;
+  }
+}
+
 export function createJobRecord({ kind, cwd, summary, model, effort = null, request = {} }) {
   return {
     id: `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
@@ -26,7 +45,7 @@ export function createJobRecord({ kind, cwd, summary, model, effort = null, requ
 }
 
 export function writeJobRecord({ jobsDir, job }) {
-  fs.writeFileSync(jobPath(jobsDir, job.id), JSON.stringify(job, null, 2));
+  writeJsonAtomically(jobPath(jobsDir, job.id), JSON.stringify(job, null, 2));
   return job;
 }
 
