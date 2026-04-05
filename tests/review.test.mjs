@@ -44,10 +44,11 @@ test("review foreground stores a completed job and writes review output", async 
   const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
   const [jobFile] = fs.readdirSync(jobsDir);
   const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+  const outputText = fs.readFileSync(job.outputFile, "utf8");
 
   assert.equal(job.kind, "review");
   assert.equal(job.status, "completed");
-  assert.equal(Boolean(job.outputFile), true);
+  assert.match(outputText, /High: add a regression test/);
 });
 
 test("review background enqueues a worker job", async () => {
@@ -72,4 +73,12 @@ test("review background enqueues a worker job", async () => {
   });
 
   assert.deepEqual(spawnedArgs.slice(0, 3), ["worker", "--cwd", repoRoot]);
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.kind, "review");
+  assert.equal(job.status, "running");
+  assert.equal(job.pid, 4242);
 });
