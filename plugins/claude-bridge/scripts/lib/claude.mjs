@@ -11,7 +11,12 @@ function formatRunnerError(result) {
     return "";
   }
 
-  return (error.code ?? error.message ?? String(error)).trim();
+  return (
+    error.message ??
+    String(error) ??
+    error.code ??
+    ""
+  ).trim();
 }
 
 export function checkClaudeAvailability({ binary, run = spawnSync }) {

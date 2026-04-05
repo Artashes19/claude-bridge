@@ -38,7 +38,7 @@ test("checkClaudeAvailability surfaces runner diagnostics when the binary is mis
   });
 
   assert.equal(result.available, false);
-  assert.match(result.error, /ENOENT/);
+  assert.equal(result.error, "spawn claude ENOENT");
 });
 
 test("buildReviewInput captures git status and both unstaged and staged diffs", () => {
@@ -90,6 +90,25 @@ test("buildReviewInput keeps base-ref reviews scoped to the range even when the 
   assert.equal(result.statusText, "Range review: origin/main...HEAD");
   assert.doesNotMatch(result.statusText, /unrelated-file\.js/);
   assert.equal(seen.includes("status --short"), false);
+});
+
+test("buildReviewInput preserves git runner diagnostics when a git command fails", () => {
+  const run = (_binary, args) => {
+    if (args.join(" ") === "status --short") {
+      return {
+        status: 128,
+        stdout: "",
+        stderr: "",
+        error: { code: "EACCES", message: "spawn git EACCES" }
+      };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  assert.throws(
+    () => buildReviewInput({ cwd: "/tmp/project", run }),
+    /spawn git EACCES/
+  );
 });
 
 test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => {

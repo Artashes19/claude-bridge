@@ -1,9 +1,28 @@
 import { spawnSync } from "node:child_process";
 
+function formatRunnerError(result, fallbackMessage) {
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  const error = result.error;
+  if (!error) {
+    return fallbackMessage;
+  }
+
+  return (
+    error.message ??
+    String(error) ??
+    error.code ??
+    fallbackMessage
+  ).trim();
+}
+
 function runGit(cwd, args, run) {
   const result = run("git", args, { cwd, encoding: "utf8" });
   if ((result.status ?? 1) !== 0) {
-    throw new Error((result.stderr ?? `git ${args.join(" ")} failed`).trim());
+    throw new Error(formatRunnerError(result, `git ${args.join(" ")} failed`));
   }
   return result.stdout ?? "";
 }
