@@ -3,10 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkClaudeAvailability, spawnDetachedWorker } from "./lib/claude.mjs";
+import {
+  checkClaudeAvailability,
+  runClaudeForeground as defaultRunClaudeForeground,
+  spawnDetachedWorker as defaultSpawnDetachedWorker
+} from "./lib/claude.mjs";
 import { loadMergedConfig, resolveClaudeBinary } from "./lib/config.mjs";
-import { listJobRecords, resolveJobRecord } from "./lib/jobs.mjs";
+import { buildReviewInput as defaultBuildReviewInput } from "./lib/git.mjs";
+import { listJobRecords, readJobRecord, resolveJobRecord, updateJobRecord } from "./lib/jobs.mjs";
 import { resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
+import {
+  enqueueReviewJob,
+  prepareReviewJob,
+  runPreparedReviewJob
+} from "./lib/review.mjs";
 import {
   renderResultReport,
   renderSetupReport,
@@ -109,8 +119,65 @@ async function handleCancel({ paths, stdio, jobId }) {
   writeLine(stdio, `Requested cancellation for ${job.id}`);
 }
 
-async function handleWorker() {
-  throw new Error("worker command is reserved for review/delegate tasks implemented later.");
+async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps }) {
+  ensureStateDirs(paths);
+
+  const job = prepareReviewJob({
+    cwd,
+    paths,
+    config,
+    requestedModel: parsed.options.model,
+    requestedEffort: parsed.options.effort,
+    baseRef: parsed.options.base ?? null,
+    focusText: parsed.positionals.join(" ").trim(),
+    buildReviewInputImpl: deps.buildReviewInput
+  });
+
+  job.request.binary = binary;
+  enqueueReviewJob({ jobsDir: paths.jobsDir, job });
+
+  if (parsed.options.background) {
+    const child = deps.spawnDetachedWorker({
+      nodeBinary: process.execPath,
+      scriptPath: SCRIPT_PATH,
+      workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
+      cwd
+    });
+
+    updateJobRecord({
+      jobsDir: paths.jobsDir,
+      jobId: job.id,
+      patch: { status: "running", pid: child.pid, startedAt: new Date().toISOString() }
+    });
+
+    writeLine(stdio, `Started review job ${job.id}`);
+    return;
+  }
+
+  const result = runPreparedReviewJob({
+    job,
+    binary,
+    paths,
+    runClaudeForeground: deps.runClaudeForeground
+  });
+
+  writeLine(stdio, result.stdout);
+}
+
+async function handleWorker({ paths, jobId, deps }) {
+  const job = readJobRecord({ jobsDir: paths.jobsDir, jobId });
+
+  if (job.kind === "review") {
+    runPreparedReviewJob({
+      job,
+      binary: job.request.binary,
+      paths,
+      runClaudeForeground: deps.runClaudeForeground
+    });
+    return;
+  }
+
+  throw new Error(`Unsupported worker job type: ${job.kind}`);
 }
 
 export async function main(argv, injected = {}) {
@@ -120,7 +187,9 @@ export async function main(argv, injected = {}) {
   const stdio = injected.stdio ?? { stdout: process.stdout, stderr: process.stderr };
   const deps = {
     checkClaudeAvailability: injected.checkClaudeAvailability ?? checkClaudeAvailability,
-    spawnDetachedWorker: injected.spawnDetachedWorker ?? spawnDetachedWorker
+    runClaudeForeground: injected.runClaudeForeground ?? defaultRunClaudeForeground,
+    spawnDetachedWorker: injected.spawnDetachedWorker ?? defaultSpawnDetachedWorker,
+    buildReviewInput: injected.buildReviewInput ?? defaultBuildReviewInput
   };
   const paths = resolvePaths({ cwd, homeDir });
   const config = loadMergedConfig({
@@ -146,8 +215,14 @@ export async function main(argv, injected = {}) {
         stdio,
         jobId: requireStringOption(parsed.options, "job-id", "cancel")
       });
+    case "review":
+      return handleReview({ parsed, cwd, paths, config, binary, stdio, deps });
     case "worker":
-      return handleWorker();
+      return handleWorker({
+        paths,
+        jobId: requireStringOption(parsed.options, "job-id", "worker"),
+        deps
+      });
     default:
       throw new Error(`Unsupported command: ${parsed.command}`);
   }
