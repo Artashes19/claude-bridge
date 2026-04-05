@@ -23,6 +23,20 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function cloneValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(cloneValue);
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      result[key] = cloneValue(nestedValue);
+    }
+    return result;
+  }
+  return value;
+}
+
 function deepMerge(base, override) {
   const result = { ...base };
   for (const [key, value] of Object.entries(override ?? {})) {
@@ -45,7 +59,7 @@ function readJsonIfExists(filePath) {
 export function loadMergedConfig({ repoConfigPath, globalConfigPath }) {
   const globalConfig = readJsonIfExists(globalConfigPath);
   const repoConfig = readJsonIfExists(repoConfigPath);
-  return deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), repoConfig);
+  return deepMerge(deepMerge(cloneValue(DEFAULT_CONFIG), globalConfig), repoConfig);
 }
 
 export function resolveModel({ command, requestedModel, config }) {

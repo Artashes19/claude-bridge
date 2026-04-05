@@ -52,6 +52,18 @@ test("loadMergedConfig uses repo config over global config", () => {
   assert.equal(config.runtime.defaultEffort, "medium");
 });
 
+test("loadMergedConfig returns isolated config objects", () => {
+  const repoConfigPath = path.join(os.tmpdir(), "claude-bridge-missing-repo-config.json");
+  const globalConfigPath = path.join(os.tmpdir(), "claude-bridge-missing-global-config.json");
+
+  const firstConfig = loadMergedConfig({ repoConfigPath, globalConfigPath });
+  firstConfig.runtime.defaultBackground = true;
+
+  const secondConfig = loadMergedConfig({ repoConfigPath, globalConfigPath });
+
+  assert.equal(secondConfig.runtime.defaultBackground, false);
+});
+
 test("resolveModel expands aliases and respects command defaults", () => {
   const config = {
     models: {
