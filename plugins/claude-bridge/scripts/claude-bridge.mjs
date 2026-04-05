@@ -115,6 +115,14 @@ async function handleCancel({ paths, stdio, jobId }) {
         throw error;
       }
     }
+    updateJobRecord({
+      jobsDir: paths.jobsDir,
+      jobId: job.id,
+      patch: {
+        status: "canceled",
+        finishedAt: new Date().toISOString()
+      }
+    });
   }
   writeLine(stdio, `Requested cancellation for ${job.id}`);
 }
@@ -147,7 +155,7 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
     updateJobRecord({
       jobsDir: paths.jobsDir,
       jobId: job.id,
-      patch: { status: "running", pid: child.pid, startedAt: new Date().toISOString() }
+      patch: { pid: child.pid }
     });
 
     writeLine(stdio, `Started review job ${job.id}`);

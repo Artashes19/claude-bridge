@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { main } from "../plugins/claude-bridge/scripts/claude-bridge.mjs";
-import { createJobRecord } from "../plugins/claude-bridge/scripts/lib/jobs.mjs";
+import { createJobRecord, readJobRecord } from "../plugins/claude-bridge/scripts/lib/jobs.mjs";
 import { ensureStateDirs, resolvePaths } from "../plugins/claude-bridge/scripts/lib/paths.mjs";
 
 function createStdoutBuffer() {
@@ -141,4 +141,47 @@ test("cancel ignores ESRCH when the worker is already gone", async () => {
   }
 
   assert.match(out.text(), new RegExp(`Requested cancellation for ${job.id}`));
+});
+
+test("cancel persists a canceled job record when the job has a pid", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-cancel-state-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  const job = createJobRecord({
+    kind: "delegate",
+    cwd: repoRoot,
+    summary: "Cancel and persist state",
+    model: "claude-sonnet-latest"
+  });
+  job.pid = 7777;
+  job.status = "running";
+  job.startedAt = "2026-04-05T00:00:00.000Z";
+  fs.writeFileSync(path.join(paths.jobsDir, `${job.id}.json`), JSON.stringify(job, null, 2));
+
+  const out = createStdoutBuffer();
+  const killCalls = [];
+  const originalKill = process.kill;
+  process.kill = (pid, signal) => {
+    killCalls.push([pid, signal]);
+  };
+
+  try {
+    await main(["cancel", "--cwd", repoRoot, "--job-id", job.id], {
+      homeDir: path.join(tempRoot, "home"),
+      stdio: out
+    });
+  } finally {
+    process.kill = originalKill;
+  }
+
+  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+
+  assert.deepEqual(killCalls, [[7777, "SIGTERM"]]);
+  assert.match(out.text(), new RegExp(`Requested cancellation for ${job.id}`));
+  assert.equal(stored.status, "canceled");
+  assert.equal(stored.finishedAt.length > 0, true);
 });

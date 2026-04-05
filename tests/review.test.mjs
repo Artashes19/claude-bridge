@@ -57,6 +57,7 @@ test("review background enqueues a worker job", async () => {
   fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
 
   let spawnedArgs = null;
+  const workerStdout = createStdoutBuffer();
 
   await main(["review", "--cwd", repoRoot, "--background", "check caching"], {
     homeDir: path.join(tempRoot, "home"),
@@ -68,6 +69,15 @@ test("review background enqueues a worker job", async () => {
     }),
     spawnDetachedWorker: ({ workerArgs }) => {
       spawnedArgs = workerArgs;
+      void main(workerArgs, {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: workerStdout,
+        runClaudeForeground: () => ({
+          exitCode: 0,
+          stdout: "1. High: validate the cache invalidation path.\n",
+          stderr: ""
+        })
+      });
       return { pid: 4242, unref() {} };
     }
   });
@@ -77,8 +87,10 @@ test("review background enqueues a worker job", async () => {
   const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
   const [jobFile] = fs.readdirSync(jobsDir);
   const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+  const outputText = fs.readFileSync(job.outputFile, "utf8");
 
   assert.equal(job.kind, "review");
-  assert.equal(job.status, "running");
+  assert.equal(job.status, "completed");
   assert.equal(job.pid, 4242);
+  assert.match(outputText, /High: validate the cache invalidation path/);
 });
