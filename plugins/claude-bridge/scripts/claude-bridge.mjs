@@ -61,6 +61,14 @@ function resolveJobOrThrow({ paths, jobId }) {
   }
 }
 
+function requireStringOption(options, key, command) {
+  const value = options[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${command} requires --${key}`);
+  }
+  return value;
+}
+
 async function handleSetup({ paths, stdio, deps, binary }) {
   ensureStateDirs(paths);
   const availability = deps.checkClaudeAvailability({ binary });
@@ -90,7 +98,13 @@ async function handleResult({ paths, stdio, jobId }) {
 async function handleCancel({ paths, stdio, jobId }) {
   const job = resolveJobOrThrow({ paths, jobId });
   if (job.pid) {
-    process.kill(job.pid, "SIGTERM");
+    try {
+      process.kill(job.pid, "SIGTERM");
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
   }
   writeLine(stdio, `Requested cancellation for ${job.id}`);
 }
@@ -121,15 +135,17 @@ export async function main(argv, injected = {}) {
     case "status":
       return handleStatus({ paths, stdio });
     case "result":
-      if (!parsed.options["job-id"]) {
-        throw new Error("result requires --job-id");
-      }
-      return handleResult({ paths, stdio, jobId: parsed.options["job-id"] });
+      return handleResult({
+        paths,
+        stdio,
+        jobId: requireStringOption(parsed.options, "job-id", "result")
+      });
     case "cancel":
-      if (!parsed.options["job-id"]) {
-        throw new Error("cancel requires --job-id");
-      }
-      return handleCancel({ paths, stdio, jobId: parsed.options["job-id"] });
+      return handleCancel({
+        paths,
+        stdio,
+        jobId: requireStringOption(parsed.options, "job-id", "cancel")
+      });
     case "worker":
       return handleWorker();
     default:
