@@ -12,7 +12,7 @@ export function buildReviewInput({ cwd, baseRef = null, run = spawnSync }) {
   if (baseRef) {
     return {
       target: `${baseRef}...HEAD`,
-      statusText: runGit(cwd, ["status", "--short"], run),
+      statusText: `Range review: ${baseRef}...HEAD`,
       diffStatText: runGit(cwd, ["diff", "--stat", "--no-ext-diff", `${baseRef}...HEAD`], run),
       diffText: runGit(cwd, ["diff", "--no-ext-diff", `${baseRef}...HEAD`], run)
     };

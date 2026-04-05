@@ -26,6 +26,21 @@ test("checkClaudeAvailability reports version when the binary works", () => {
   assert.equal(result.version, "2.1.92 (Claude Code)");
 });
 
+test("checkClaudeAvailability surfaces runner diagnostics when the binary is missing", () => {
+  const result = checkClaudeAvailability({
+    binary: "claude",
+    run: () => ({
+      status: 127,
+      stdout: "",
+      stderr: "",
+      error: { code: "ENOENT", message: "spawn claude ENOENT" }
+    })
+  });
+
+  assert.equal(result.available, false);
+  assert.match(result.error, /ENOENT/);
+});
+
 test("buildReviewInput captures git status and both unstaged and staged diffs", () => {
   const seen = [];
   const run = (_binary, args) => {
@@ -51,6 +66,30 @@ test("buildReviewInput captures git status and both unstaged and staged diffs", 
   assert.match(result.diffStatText, /src\/index\.js/);
   assert.match(result.diffText, /\+new/);
   assert.equal(seen.length, 4);
+});
+
+test("buildReviewInput keeps base-ref reviews scoped to the range even when the tree is dirty", () => {
+  const seen = [];
+  const run = (_binary, args) => {
+    seen.push(args.join(" "));
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "M unrelated-file.js\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff origin/main...HEAD") {
+      return { status: 0, stdout: " src/index.js | 2 +-\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff origin/main...HEAD") {
+      return { status: 0, stdout: "@@ -1 +1 @@\n-old\n+new\n", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: "/tmp/project", baseRef: "origin/main", run });
+
+  assert.equal(result.target, "origin/main...HEAD");
+  assert.equal(result.statusText, "Range review: origin/main...HEAD");
+  assert.doesNotMatch(result.statusText, /unrelated-file\.js/);
+  assert.equal(seen.includes("status --short"), false);
 });
 
 test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => {

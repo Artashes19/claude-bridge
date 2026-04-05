@@ -1,11 +1,25 @@
 import { spawn, spawnSync } from "node:child_process";
 
+function formatRunnerError(result) {
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  const error = result.error;
+  if (!error) {
+    return "";
+  }
+
+  return (error.code ?? error.message ?? String(error)).trim();
+}
+
 export function checkClaudeAvailability({ binary, run = spawnSync }) {
   const result = run(binary, ["--version"], { encoding: "utf8" });
   return {
     available: result.status === 0,
     version: (result.stdout ?? "").trim(),
-    error: (result.stderr ?? "").trim()
+    error: formatRunnerError(result)
   };
 }
 
