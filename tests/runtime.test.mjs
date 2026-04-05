@@ -1,0 +1,110 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  buildDelegateClaudeArgs,
+  buildReviewClaudeArgs,
+  checkClaudeAvailability
+} from "../plugins/claude-bridge/scripts/lib/claude.mjs";
+import { buildReviewInput } from "../plugins/claude-bridge/scripts/lib/git.mjs";
+import {
+  buildDelegatePrompt,
+  buildReviewPrompt
+} from "../plugins/claude-bridge/scripts/lib/prompts.mjs";
+
+test("checkClaudeAvailability reports version when the binary works", () => {
+  const result = checkClaudeAvailability({
+    binary: "claude",
+    run: () => ({
+      status: 0,
+      stdout: "2.1.92 (Claude Code)\n",
+      stderr: ""
+    })
+  });
+
+  assert.equal(result.available, true);
+  assert.equal(result.version, "2.1.92 (Claude Code)");
+});
+
+test("buildReviewInput captures git status and both unstaged and staged diffs", () => {
+  const seen = [];
+  const run = (_binary, args) => {
+    seen.push(args.join(" "));
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "M src/index.js\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: " src/index.js | 3 ++-\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: "@@ -1 +1 @@\n-old\n+new\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: "/tmp/project", run });
+
+  assert.match(result.statusText, /M src\/index\.js/);
+  assert.match(result.diffStatText, /src\/index\.js/);
+  assert.match(result.diffText, /\+new/);
+  assert.equal(seen.length, 4);
+});
+
+test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => {
+  const args = buildReviewClaudeArgs({
+    model: "claude-opus-latest",
+    effort: "high",
+    prompt: "Review these changes."
+  });
+
+  assert.deepEqual(args.slice(0, 9), [
+    "-p",
+    "--model",
+    "claude-opus-latest",
+    "--effort",
+    "high",
+    "--tools",
+    "",
+    "--permission-mode",
+    "plan"
+  ]);
+});
+
+test("buildDelegateClaudeArgs keeps Claude editable", () => {
+  const args = buildDelegateClaudeArgs({
+    model: "claude-sonnet-latest",
+    effort: "medium",
+    prompt: "Fix the bug."
+  });
+
+  assert.deepEqual(args.slice(0, 7), [
+    "-p",
+    "--model",
+    "claude-sonnet-latest",
+    "--effort",
+    "medium",
+    "--permission-mode",
+    "acceptEdits"
+  ]);
+});
+
+test("buildReviewPrompt and buildDelegatePrompt interpolate template markers", () => {
+  const reviewPrompt = buildReviewPrompt({
+    template: "Target: {{TARGET}}\\nFocus: {{FOCUS}}\\nDiff:\\n{{DIFF}}",
+    target: "working tree",
+    focus: "look for missing tests",
+    diff: "+ const answer = 42;"
+  });
+
+  const delegatePrompt = buildDelegatePrompt({
+    template: "Task: {{TASK}}\\nResume: {{RESUME_CONTEXT}}",
+    task: "fix the flaky test",
+    resumeContext: "none"
+  });
+
+  assert.match(reviewPrompt, /look for missing tests/);
+  assert.match(delegatePrompt, /fix the flaky test/);
+});

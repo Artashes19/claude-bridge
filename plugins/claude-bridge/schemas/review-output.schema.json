@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClaudeReviewOutput",
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string" },
+          "title": { "type": "string" },
+          "details": { "type": "string" }
+        },
+        "required": ["severity", "title", "details"]
+      }
+    }
+  },
+  "required": ["summary", "findings"]
+}
