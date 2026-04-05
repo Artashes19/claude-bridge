@@ -20,20 +20,62 @@ function resolveResumeContext({ jobsDir, jobIdOrLatest }) {
     return "No prior run context.";
   }
 
-  const jobs = listJobRecords({ jobsDir }).filter(
-    (job) => job.kind === "delegate" && job.outputFile && fs.existsSync(job.outputFile)
-  );
-  const job =
-    jobIdOrLatest === "latest"
-      ? jobs[0]
-      : jobs.find((candidate) => candidate.id === jobIdOrLatest);
+  const isReadableCompletedDelegateJob = (job) =>
+    job.kind === "delegate" &&
+    job.status === "completed" &&
+    Boolean(job.outputFile) &&
+    fs.existsSync(job.outputFile);
+  const jobTimestamp = (job) => {
+    const value = Date.parse(job.finishedAt ?? job.createdAt ?? "");
+    return Number.isNaN(value) ? 0 : value;
+  };
+  const readResumeOutput = (job, { explicitJobId = null } = {}) => {
+    try {
+      return fs.readFileSync(job.outputFile, "utf8").trim().slice(-2000);
+    } catch (error) {
+      if (explicitJobId) {
+        throw new Error(`Cannot resume from job "${explicitJobId}": output file is not readable`);
+      }
+      return null;
+    }
+  };
 
-  if (!job) {
+  const jobs = listJobRecords({ jobsDir });
+
+  if (jobIdOrLatest === "latest") {
+    const candidates = jobs
+      .filter(isReadableCompletedDelegateJob)
+      .sort((left, right) => jobTimestamp(right) - jobTimestamp(left));
+
+    for (const job of candidates) {
+      const previousOutput = readResumeOutput(job);
+      if (previousOutput !== null) {
+        return previousOutput;
+      }
+    }
+
     return "No prior run context.";
   }
 
-  const previousOutput = fs.readFileSync(job.outputFile, "utf8").trim();
-  return previousOutput.slice(-2000);
+  const job = jobs.find((candidate) => candidate.id === jobIdOrLatest);
+
+  if (!job) {
+    throw new Error(`Cannot resume from job "${jobIdOrLatest}": job not found`);
+  }
+
+  if (job.kind !== "delegate") {
+    throw new Error(`Cannot resume from job "${jobIdOrLatest}": only completed delegate jobs can be resumed`);
+  }
+
+  if (job.status !== "completed") {
+    throw new Error(`Cannot resume from job "${jobIdOrLatest}": job is not completed`);
+  }
+
+  if (!job.outputFile || !fs.existsSync(job.outputFile)) {
+    throw new Error(`Cannot resume from job "${jobIdOrLatest}": output file is not readable`);
+  }
+
+  return readResumeOutput(job, { explicitJobId: jobIdOrLatest });
 }
 
 export function prepareDelegateJob({

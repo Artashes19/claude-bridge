@@ -42,29 +42,51 @@ test("delegate foreground stores a completed job and prints Claude output", asyn
   assert.equal(job.status, "completed");
 });
 
-test("delegate --resume latest includes prior output context", async () => {
+test("delegate --resume latest selects the newest completed output by finishedAt", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-resume-"));
   const repoRoot = path.join(tempRoot, "repo");
   fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
   fs.mkdirSync(path.join(repoRoot, ".claude-bridge", "jobs"), { recursive: true });
   fs.mkdirSync(path.join(repoRoot, ".claude-bridge", "output"), { recursive: true });
 
-  const oldJobId = "old-job";
+  const olderByFinishedAt = "older-finished";
+  const newerByCreatedAt = "newer-created";
+
   fs.writeFileSync(
-    path.join(repoRoot, ".claude-bridge", "output", `${oldJobId}.txt`),
-    "Previous run changed src/cache.js but did not update tests.\n"
+    path.join(repoRoot, ".claude-bridge", "output", `${olderByFinishedAt}.txt`),
+    "Selected output from the job that finished last.\n"
   );
   fs.writeFileSync(
-    path.join(repoRoot, ".claude-bridge", "jobs", `${oldJobId}.json`),
+    path.join(repoRoot, ".claude-bridge", "jobs", `${olderByFinishedAt}.json`),
     JSON.stringify({
-      id: oldJobId,
+      id: olderByFinishedAt,
       kind: "delegate",
       cwd: repoRoot,
-      summary: "Fix cache bug",
+      summary: "Older finished job",
       model: "claude-sonnet-latest",
       status: "completed",
-      outputFile: path.join(repoRoot, ".claude-bridge", "output", `${oldJobId}.txt`),
-      createdAt: "2026-04-05T10:00:00.000Z"
+      outputFile: path.join(repoRoot, ".claude-bridge", "output", `${olderByFinishedAt}.txt`),
+      createdAt: "2026-04-05T10:00:00.000Z",
+      finishedAt: "2026-04-05T11:00:00.000Z"
+    })
+  );
+
+  fs.writeFileSync(
+    path.join(repoRoot, ".claude-bridge", "output", `${newerByCreatedAt}.txt`),
+    "Stale output from the job that finished earlier.\n"
+  );
+  fs.writeFileSync(
+    path.join(repoRoot, ".claude-bridge", "jobs", `${newerByCreatedAt}.json`),
+    JSON.stringify({
+      id: newerByCreatedAt,
+      kind: "delegate",
+      cwd: repoRoot,
+      summary: "Newer created job",
+      model: "claude-sonnet-latest",
+      status: "completed",
+      outputFile: path.join(repoRoot, ".claude-bridge", "output", `${newerByCreatedAt}.txt`),
+      createdAt: "2026-04-05T12:00:00.000Z",
+      finishedAt: "2026-04-05T10:30:00.000Z"
     })
   );
 
@@ -78,7 +100,73 @@ test("delegate --resume latest includes prior output context", async () => {
     }
   });
 
-  assert.match(seenPrompt, /Previous run changed src\/cache\.js/);
+  assert.match(seenPrompt, /Selected output from the job that finished last\./);
+  assert.doesNotMatch(seenPrompt, /Stale output from the job that finished earlier\./);
+});
+
+test("delegate --resume rejects missing or invalid explicit sources", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-resume-explicit-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(repoRoot, ".claude-bridge", "jobs"), { recursive: true });
+  fs.mkdirSync(path.join(repoRoot, ".claude-bridge", "output"), { recursive: true });
+
+  const invalidJobId = "review-job";
+  fs.writeFileSync(
+    path.join(repoRoot, ".claude-bridge", "output", `${invalidJobId}.txt`),
+    "Review output that should not be resumable from delegate.\n"
+  );
+  fs.writeFileSync(
+    path.join(repoRoot, ".claude-bridge", "jobs", `${invalidJobId}.json`),
+    JSON.stringify({
+      id: invalidJobId,
+      kind: "review",
+      cwd: repoRoot,
+      summary: "Review job",
+      model: "claude-opus-latest",
+      status: "completed",
+      outputFile: path.join(repoRoot, ".claude-bridge", "output", `${invalidJobId}.txt`),
+      createdAt: "2026-04-05T10:00:00.000Z",
+      finishedAt: "2026-04-05T10:05:00.000Z"
+    })
+  );
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot, "--resume", "missing-job", "finish the test coverage"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out
+      }),
+    /Cannot resume from job "missing-job"/
+  );
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot, "--resume", invalidJobId, "finish the test coverage"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out
+      }),
+    new RegExp(`Cannot resume from job "${invalidJobId}"`)
+  );
+});
+
+test("delegate requires a task description", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-empty-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out
+      }),
+    /delegate requires a task description/
+  );
 });
 
 test("delegate background preserves the worker result when the worker finishes quickly", async () => {

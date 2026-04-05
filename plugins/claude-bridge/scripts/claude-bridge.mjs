@@ -34,13 +34,14 @@ function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   const positionals = [];
+  const booleanFlags = new Set(["background"]);
 
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
     if (value.startsWith("--")) {
       const key = value.slice(2);
       const next = rest[index + 1];
-      if (!next || next.startsWith("--")) {
+      if (booleanFlags.has(key) || !next || next.startsWith("--")) {
         options[key] = true;
       } else {
         options[key] = next;
@@ -82,6 +83,14 @@ function requireStringOption(options, key, command) {
     throw new Error(`${command} requires --${key}`);
   }
   return value;
+}
+
+function requireTaskDescription(positionals) {
+  const taskText = positionals.join(" ").trim();
+  if (!taskText) {
+    throw new Error("delegate requires a task description");
+  }
+  return taskText;
 }
 
 async function handleSetup({ paths, stdio, deps, binary }) {
@@ -178,6 +187,7 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
 }
 
 async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps }) {
+  const taskText = requireTaskDescription(parsed.positionals);
   ensureStateDirs(paths);
 
   const job = prepareDelegateJob({
@@ -186,7 +196,7 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
     config,
     requestedModel: parsed.options.model,
     requestedEffort: parsed.options.effort,
-    taskText: parsed.positionals.join(" ").trim(),
+    taskText,
     resumeSpecifier: parsed.options.resume ?? null
   });
 
