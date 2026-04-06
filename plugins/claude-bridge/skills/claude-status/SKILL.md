@@ -5,12 +5,8 @@ description: Use when the user wants to see Claude Bridge jobs for the current r
 
 # Claude Status
 
-Use the `bridge_status` MCP tool:
+Call the `bridge_status` MCP tool with `cwd` set to the current working directory.
 
-- `bridge_status` with `cwd` set to the current working directory
+Returns a list of all jobs (newest first) with id, kind, status, model, and summary.
 
-Returns a list of all jobs (newest first) with their id, kind, status, model, and summary.
-
-Fallback (if MCP is unavailable):
-
-- `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" status --cwd "."`
+Do NOT run shell commands — use the MCP tool.
