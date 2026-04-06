@@ -130,12 +130,27 @@ export async function handleReview({
   enqueueReviewJob({ jobsDir: ctx.paths.jobsDir, job });
 
   if (background) {
-    const child = deps.spawnDetachedWorker({
-      nodeBinary: process.execPath,
-      scriptPath: CLI_SCRIPT,
-      workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
-      cwd: ctx.cwd,
-    });
+    let child;
+    try {
+      child = deps.spawnDetachedWorker({
+        nodeBinary: process.execPath,
+        scriptPath: CLI_SCRIPT,
+        workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
+        cwd: ctx.cwd,
+      });
+    } catch (err) {
+      updateJobRecord({
+        jobsDir: ctx.paths.jobsDir,
+        jobId: job.id,
+        patch: {
+          status: "failed",
+          pid: null,
+          stderrTail: (err?.message ?? String(err)).slice(-2000),
+          finishedAt: new Date().toISOString(),
+        },
+      });
+      return { jobId: job.id, status: "failed", error: err.message };
+    }
     updateJobRecord({
       jobsDir: ctx.paths.jobsDir,
       jobId: job.id,
@@ -190,12 +205,27 @@ export async function handleDelegate({
   enqueueDelegateJob({ jobsDir: ctx.paths.jobsDir, job });
 
   if (background) {
-    const child = deps.spawnDetachedWorker({
-      nodeBinary: process.execPath,
-      scriptPath: CLI_SCRIPT,
-      workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
-      cwd: ctx.cwd,
-    });
+    let child;
+    try {
+      child = deps.spawnDetachedWorker({
+        nodeBinary: process.execPath,
+        scriptPath: CLI_SCRIPT,
+        workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
+        cwd: ctx.cwd,
+      });
+    } catch (err) {
+      updateJobRecord({
+        jobsDir: ctx.paths.jobsDir,
+        jobId: job.id,
+        patch: {
+          status: "failed",
+          pid: null,
+          stderrTail: (err?.message ?? String(err)).slice(-2000),
+          finishedAt: new Date().toISOString(),
+        },
+      });
+      return { jobId: job.id, status: "failed", error: err.message };
+    }
     updateJobRecord({
       jobsDir: ctx.paths.jobsDir,
       jobId: job.id,
@@ -254,7 +284,7 @@ export async function handleResult({ cwd, homeDir, jobId, deps: injectedDeps } =
   try {
     job = resolveJobRecord({ jobsDir: ctx.paths.jobsDir, jobIdOrLatest: jobId });
   } catch (err) {
-    if (err?.code === "ENOENT") {
+    if (err?.code === "ENOENT" || err?.message?.startsWith("No job found")) {
       return { error: `No job found for "${jobId}"` };
     }
     throw err;
@@ -288,7 +318,7 @@ export async function handleCancel({ cwd, homeDir, jobId, deps: injectedDeps } =
   try {
     job = resolveJobRecord({ jobsDir: ctx.paths.jobsDir, jobIdOrLatest: jobId });
   } catch (err) {
-    if (err?.code === "ENOENT") {
+    if (err?.code === "ENOENT" || err?.message?.startsWith("No job found")) {
       return { error: `No job found for "${jobId}"` };
     }
     throw err;
@@ -301,10 +331,23 @@ export async function handleCancel({ cwd, homeDir, jobId, deps: injectedDeps } =
   }
 
   if (job.pid) {
+    const pgid = -Math.abs(job.pid);
     try {
-      deps.killProcess(-Math.abs(job.pid), "SIGTERM");
+      deps.killProcess(pgid, "SIGTERM");
     } catch (err) {
       if (err?.code !== "ESRCH") throw err;
+    }
+
+    // Wait for process group to exit (up to 2s)
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      try {
+        deps.killProcess(pgid, 0);
+      } catch (err) {
+        if (err?.code === "ESRCH") break;
+        throw err;
+      }
+      await deps.sleep(100);
     }
   }
 

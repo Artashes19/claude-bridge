@@ -211,3 +211,47 @@ test("handleCancel returns error when no jobId provided", async () => {
   assert.match(result.error, /requires a job ID/);
   fs.rmSync(tmpDir, { recursive: true });
 });
+
+// ── Tests for review findings #2 and #4 ──────────────────────────────────────
+
+test("handleResult returns error for 'latest' on empty repo", async () => {
+  const tmpDir = makeTmpRepo();
+  const result = await handleResult({
+    cwd: tmpDir,
+    homeDir: tmpDir,
+    jobId: "latest",
+    deps: gitOk(tmpDir),
+  });
+  assert.match(result.error, /No job found/);
+  fs.rmSync(tmpDir, { recursive: true });
+});
+
+test("handleCancel returns error for 'latest' on empty repo", async () => {
+  const tmpDir = makeTmpRepo();
+  const result = await handleCancel({
+    cwd: tmpDir,
+    homeDir: tmpDir,
+    jobId: "latest",
+    deps: gitOk(tmpDir),
+  });
+  assert.match(result.error, /No job found/);
+  fs.rmSync(tmpDir, { recursive: true });
+});
+
+test("handleReview background marks job failed on spawn error", async () => {
+  const tmpDir = makeTmpRepo();
+  const result = await handleReview({
+    cwd: tmpDir,
+    homeDir: tmpDir,
+    background: true,
+    deps: {
+      ...gitOk(tmpDir),
+      buildReviewInput: () => ({ target: "working tree", statusText: "", diffStatText: "", diffText: "" }),
+      runClaudeForeground: () => ({ exitCode: 0, stdout: "", stderr: "", error: null }),
+      spawnDetachedWorker: () => { throw new Error("spawn failed"); },
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /spawn failed/);
+  fs.rmSync(tmpDir, { recursive: true });
+});
