@@ -8,11 +8,6 @@ function formatRunnerError(result) {
     return stderr;
   }
 
-  const stdout = (result.stdout ?? "").trim();
-  if (stdout) {
-    return stdout;
-  }
-
   const error = result.error;
   if (!error) {
     return "";
@@ -72,7 +67,10 @@ export function checkClaudeReadiness({
     };
   }
 
-  const probeError = formatRunnerError(probe) || `exit code ${probe.exitCode ?? "unknown"}`;
+  const probeError =
+    formatRunnerError(probe) ||
+    (probe.stdout ?? "").trim() ||
+    `exit code ${probe.exitCode ?? "unknown"}`;
   return {
     ready: false,
     version: availability.version,

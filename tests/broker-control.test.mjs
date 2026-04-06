@@ -56,6 +56,7 @@ test("setup prints readiness information", async () => {
   await main(["setup", "--cwd", repoRoot], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
+    checkGitRepository: () => ({ valid: true }),
     checkClaudeReadiness: (args) => {
       seenReadinessArgs = args;
       return {
@@ -84,6 +85,7 @@ test("setup reports auth failures clearly when Claude cannot run a prompt", asyn
   await main(["setup", "--cwd", repoRoot], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
+    checkGitRepository: () => ({ valid: true }),
     checkClaudeReadiness: () => ({
       ready: false,
       version: "2.1.92 (Claude Code)",
@@ -94,6 +96,42 @@ test("setup reports auth failures clearly when Claude cannot run a prompt", asyn
   assert.match(out.text(), /READY: no/);
   assert.match(out.text(), /CLAUDE VERSION: 2.1.92 \(Claude Code\)/);
   assert.match(out.text(), /Not logged in/);
+});
+
+test("setup reports a non-git cwd clearly and does not create repo state", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-setup-non-git-"));
+  const repoRoot = path.join(tempRoot, "not-a-repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+
+  const out = createStdoutBuffer();
+  let readinessCalls = 0;
+
+  await main(["setup", "--cwd", repoRoot], {
+    homeDir: path.join(tempRoot, "home"),
+    stdio: out,
+    checkGitRepository: () => ({
+      valid: false,
+      error: "fatal: not a git repository"
+    }),
+    checkClaudeAvailability: () => ({
+      available: true,
+      version: "2.1.92 (Claude Code)",
+      error: ""
+    }),
+    checkClaudeReadiness: () => {
+      readinessCalls += 1;
+      return {
+        ready: true,
+        version: "2.1.92 (Claude Code)",
+        error: ""
+      };
+    }
+  });
+
+  assert.match(out.text(), /READY: no/);
+  assert.match(out.text(), /fatal: not a git repository/);
+  assert.equal(readinessCalls, 0);
+  assert.equal(fs.existsSync(path.join(repoRoot, ".claude-bridge")), false);
 });
 
 test("status prints no jobs yet when the repo has no state", async () => {

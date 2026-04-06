@@ -29,6 +29,7 @@ test("checkClaudeAvailability reports version when the binary works", () => {
 
   assert.equal(result.available, true);
   assert.equal(result.version, "2.1.92 (Claude Code)");
+  assert.equal(result.error, "");
 });
 
 test("checkClaudeAvailability surfaces runner diagnostics when the binary is missing", () => {

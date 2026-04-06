@@ -17,7 +17,7 @@ import {
 } from "./lib/config.mjs";
 import { buildReviewInput as defaultBuildReviewInput } from "./lib/git.mjs";
 import { listJobRecords, readJobRecord, resolveJobRecord, updateJobRecord } from "./lib/jobs.mjs";
-import { resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
+import { checkGitRepository, resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
 import {
   enqueueDelegateJob,
   prepareDelegateJob,
@@ -170,6 +170,26 @@ async function waitForProcessGroupExit({
 }
 
 async function handleSetup({ paths, stdio, deps, binary, config, cwd }) {
+  const repository = deps.checkGitRepository({ cwd });
+  if (!repository.valid) {
+    const availability = deps.checkClaudeAvailability({ binary });
+    const combinedError = availability.error
+      ? `${repository.error}; ${availability.error}`
+      : repository.error;
+
+    writeLine(
+      stdio,
+      renderSetupReport({
+        ready: false,
+        binary,
+        version: availability.version,
+        repoStateDir: paths.repoStateDir,
+        error: combinedError
+      })
+    );
+    return;
+  }
+
   ensureStateDirs(paths);
   const readiness = deps.checkClaudeReadiness({
     binary,
@@ -373,6 +393,7 @@ export async function main(argv, injected = {}) {
   const homeDir = injected.homeDir ?? os.homedir();
   const stdio = injected.stdio ?? { stdout: process.stdout, stderr: process.stderr };
   const deps = {
+    checkGitRepository: injected.checkGitRepository ?? checkGitRepository,
     checkClaudeAvailability: injected.checkClaudeAvailability ?? checkClaudeAvailability,
     checkClaudeReadiness: injected.checkClaudeReadiness ?? checkClaudeReadiness,
     runClaudeForeground: injected.runClaudeForeground ?? defaultRunClaudeForeground,

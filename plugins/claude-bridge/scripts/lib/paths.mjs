@@ -19,6 +19,27 @@ export function findRepoRoot(startCwd) {
   }
 }
 
+export function checkGitRepository({ cwd, run = spawnSync }) {
+  try {
+    const result = run("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8"
+    });
+
+    if ((result.status ?? 1) === 0) {
+      return { valid: true, repoRoot: (result.stdout ?? "").trim() };
+    }
+
+    const error = (result.stderr ?? "").trim() || result.error?.message || "fatal: not a git repository";
+    return { valid: false, error };
+  } catch (error) {
+    return {
+      valid: false,
+      error: error?.message ?? String(error)
+    };
+  }
+}
+
 export function resolvePaths({ cwd, homeDir = os.homedir() }) {
   const repoRoot = findRepoRoot(cwd);
   const repoStateDir = path.join(repoRoot, ".claude-bridge");

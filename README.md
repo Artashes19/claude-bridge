@@ -12,6 +12,7 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
 - Claude Code installed locally
 - `claude` available on `PATH`
 - Claude Code authenticated so it can run a prompt; `setup` probes the current repo's read-only review defaults in the requested `--cwd` and reports `READY: no` until that review configuration can run
+- `setup --cwd` must point at a Git repo when you want to validate the review flow for that repo
 - Node.js 18+ available on `PATH`
 - Repo-local state is bootstrapped into the target repo's local Git exclude file so `.claude-bridge/` stays untracked by default
 - Read-only review input excludes repo-local `.claude-bridge/` artifacts from the working-tree status text and only inlines small text untracked files; large, binary, or unreadable untracked files are skipped with an explicit note
@@ -53,7 +54,7 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
    node ~/plugins/claude-bridge/scripts/claude-bridge.mjs setup --cwd "$PWD"
    ```
 
-   `READY: yes` means the local Claude CLI is installed, reports its version, and can execute a prompt using the current repo's read-only review defaults in `--cwd` (including the resolved model and default effort). If you see `READY: no` with `Not logged in · Please run /login`, sign in to Claude Code and rerun the command in that repo.
+   `READY: yes` means the local Claude CLI is installed, reports its version, and can execute a prompt using the current repo's read-only review defaults in `--cwd` (including the resolved model and default effort). If `--cwd` is not inside a Git repo, or if you see `READY: no` with `Not logged in · Please run /login`, fix that repo/auth state and rerun the command there.
 
 ## Config
 
