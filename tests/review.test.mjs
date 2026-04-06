@@ -16,6 +16,10 @@ function createStdoutBuffer() {
   };
 }
 
+function assumeGitRepository() {
+  return { valid: true };
+}
+
 test("review foreground stores a completed job and writes review output", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-"));
   const repoRoot = path.join(tempRoot, "repo");
@@ -26,6 +30,7 @@ test("review foreground stores a completed job and writes review output", async 
   await main(["review", "--cwd", repoRoot, "--model", "opus", "look for missing tests"], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
+    checkGitRepository: assumeGitRepository,
     buildReviewInput: () => ({
       target: "working tree",
       statusText: "M src/index.js\n",
@@ -63,6 +68,7 @@ test("review foreground rejects and prefers stderr diagnostics on Claude failure
       main(["review", "--cwd", repoRoot, "look for auth blockers"], {
         homeDir: path.join(tempRoot, "home"),
         stdio: out,
+        checkGitRepository: assumeGitRepository,
         buildReviewInput: () => ({
           target: "working tree",
           statusText: "",
@@ -99,6 +105,7 @@ test("review foreground falls back to runner error diagnostics when stderr and s
       main(["review", "--cwd", repoRoot, "look for missing auth"], {
         homeDir: path.join(tempRoot, "home"),
         stdio: out,
+        checkGitRepository: assumeGitRepository,
         buildReviewInput: () => ({
           target: "working tree",
           statusText: "",
@@ -134,6 +141,7 @@ test("review background enqueues a worker job", async () => {
 
   await main(["review", "--cwd", repoRoot, "--background", "check caching"], {
     homeDir: path.join(tempRoot, "home"),
+    checkGitRepository: assumeGitRepository,
     buildReviewInput: () => ({
       target: "working tree",
       statusText: "",
@@ -166,4 +174,65 @@ test("review background enqueues a worker job", async () => {
   assert.equal(job.status, "completed");
   assert.equal(job.pid, null);
   assert.match(outputText, /High: validate the cache invalidation path/);
+});
+
+test("review rejects a non-git cwd and does not create repo state", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-non-git-"));
+  const repoRoot = path.join(tempRoot, "not-a-repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["review", "--cwd", repoRoot, "check the repo"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        checkGitRepository: () => ({
+          valid: false,
+          error: "fatal: not a git repository"
+        })
+      }),
+    /fatal: not a git repository/
+  );
+
+  assert.equal(fs.existsSync(path.join(repoRoot, ".claude-bridge")), false);
+  assert.equal(out.text(), "");
+});
+
+test("review background marks the job failed when worker launch throws", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-spawn-fail-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["review", "--cwd", repoRoot, "--background", "check caching"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        checkGitRepository: assumeGitRepository,
+        buildReviewInput: () => ({
+          target: "working tree",
+          statusText: "",
+          diffStatText: "",
+          diffText: ""
+        }),
+        spawnDetachedWorker: () => {
+          throw new Error("worker spawn failed");
+        }
+      }),
+    /worker spawn failed/
+  );
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.status, "failed");
+  assert.equal(job.pid, null);
+  assert.match(job.stderrTail, /worker spawn failed/);
+  assert.equal(job.finishedAt.length > 0, true);
+  assert.equal(out.text(), "");
 });

@@ -16,6 +16,10 @@ function createStdoutBuffer() {
   };
 }
 
+function assumeGitRepository() {
+  return { valid: true };
+}
+
 test("delegate foreground stores a completed job and prints Claude output", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-"));
   const repoRoot = path.join(tempRoot, "repo");
@@ -26,6 +30,7 @@ test("delegate foreground stores a completed job and prints Claude output", asyn
   await main(["delegate", "--cwd", repoRoot, "--model", "sonnet", "fix the flaky test"], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
+    checkGitRepository: assumeGitRepository,
     runClaudeForeground: () => ({
       exitCode: 0,
       stdout: "Updated tests/cache.test.js and src/cache.js\n",
@@ -54,6 +59,7 @@ test("delegate foreground rejects and falls back to stdout diagnostics on Claude
       main(["delegate", "--cwd", repoRoot, "fix auth flow"], {
         homeDir: path.join(tempRoot, "home"),
         stdio: out,
+        checkGitRepository: assumeGitRepository,
         runClaudeForeground: () => ({
           exitCode: 1,
           stdout: "Claude hit a policy blocker while editing\n",
@@ -84,6 +90,7 @@ test("delegate foreground falls back to runner error diagnostics when stderr and
       main(["delegate", "--cwd", repoRoot, "fix the auth flow"], {
         homeDir: path.join(tempRoot, "home"),
         stdio: out,
+        checkGitRepository: assumeGitRepository,
         runClaudeForeground: () => ({
           exitCode: 1,
           stdout: "",
@@ -156,6 +163,7 @@ test("delegate --resume latest selects the newest completed output by finishedAt
 
   await main(["delegate", "--cwd", repoRoot, "--resume", "latest", "finish the test coverage"], {
     homeDir: path.join(tempRoot, "home"),
+    checkGitRepository: assumeGitRepository,
     runClaudeForeground: ({ args }) => {
       seenPrompt = args.at(-1);
       return { exitCode: 0, stdout: "Done.\n", stderr: "" };
@@ -199,7 +207,8 @@ test("delegate --resume rejects missing or invalid explicit sources", async () =
     () =>
       main(["delegate", "--cwd", repoRoot, "--resume", "missing-job", "finish the test coverage"], {
         homeDir: path.join(tempRoot, "home"),
-        stdio: out
+        stdio: out,
+        checkGitRepository: assumeGitRepository
       }),
     /Cannot resume from job "missing-job"/
   );
@@ -208,7 +217,8 @@ test("delegate --resume rejects missing or invalid explicit sources", async () =
     () =>
       main(["delegate", "--cwd", repoRoot, "--resume", invalidJobId, "finish the test coverage"], {
         homeDir: path.join(tempRoot, "home"),
-        stdio: out
+        stdio: out,
+        checkGitRepository: assumeGitRepository
       }),
     new RegExp(`Cannot resume from job "${invalidJobId}"`)
   );
@@ -241,6 +251,7 @@ test("delegate background preserves the worker result when the worker finishes q
 
   await main(["delegate", "--cwd", repoRoot, "--background", "fix the flaky test"], {
     homeDir: path.join(tempRoot, "home"),
+    checkGitRepository: assumeGitRepository,
     spawnDetachedWorker: ({ workerArgs }) => {
       spawnedArgs = workerArgs;
       void main(workerArgs, {
@@ -267,4 +278,60 @@ test("delegate background preserves the worker result when the worker finishes q
   assert.equal(job.status, "completed");
   assert.equal(job.pid, null);
   assert.match(outputText, /Updated tests\/cache\.test\.js/);
+});
+
+test("delegate rejects a non-git cwd and does not create repo state", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-non-git-"));
+  const repoRoot = path.join(tempRoot, "not-a-repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot, "fix the repo"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        checkGitRepository: () => ({
+          valid: false,
+          error: "fatal: not a git repository"
+        })
+      }),
+    /fatal: not a git repository/
+  );
+
+  assert.equal(fs.existsSync(path.join(repoRoot, ".claude-bridge")), false);
+  assert.equal(out.text(), "");
+});
+
+test("delegate background marks the job failed when worker launch throws", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-spawn-fail-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot, "--background", "fix the flaky test"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        checkGitRepository: assumeGitRepository,
+        spawnDetachedWorker: () => {
+          throw new Error("worker spawn failed");
+        }
+      }),
+    /worker spawn failed/
+  );
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.kind, "delegate");
+  assert.equal(job.status, "failed");
+  assert.equal(job.pid, null);
+  assert.match(job.stderrTail, /worker spawn failed/);
+  assert.equal(job.finishedAt.length > 0, true);
+  assert.equal(out.text(), "");
 });

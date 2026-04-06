@@ -27,6 +27,10 @@ function createStdoutBuffer() {
   };
 }
 
+function assumeGitRepository() {
+  return { valid: true };
+}
+
 test("setup prints readiness information", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-setup-"));
   const repoRoot = path.join(tempRoot, "repo");
@@ -143,10 +147,35 @@ test("status prints no jobs yet when the repo has no state", async () => {
 
   await main(["status", "--cwd", repoRoot], {
     homeDir: path.join(tempRoot, "home"),
-    stdio: out
+    stdio: out,
+    checkGitRepository: assumeGitRepository
   });
 
   assert.match(out.text(), /No Claude Bridge jobs found/);
+});
+
+test("status rejects a non-git cwd and does not create repo state", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-status-non-git-"));
+  const repoRoot = path.join(tempRoot, "not-a-repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["status", "--cwd", repoRoot], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        checkGitRepository: () => ({
+          valid: false,
+          error: "fatal: not a git repository"
+        })
+      }),
+    /fatal: not a git repository/
+  );
+
+  assert.equal(fs.existsSync(path.join(repoRoot, ".claude-bridge")), false);
+  assert.equal(out.text(), "");
 });
 
 test("result reports a missing job clearly", async () => {

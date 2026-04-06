@@ -3,6 +3,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { TextDecoder } from "node:util";
 
+const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_TRACKED_DIFF_STAT_BYTES = 16 * 1024;
+const MAX_TRACKED_DIFF_BYTES = 64 * 1024;
 const MAX_UNTRACKED_FILE_BYTES = 16 * 1024;
 const MAX_UNTRACKED_SECTION_BYTES = 64 * 1024;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -27,11 +30,26 @@ function formatRunnerError(result, fallbackMessage) {
 }
 
 function runGit(cwd, args, run) {
-  const result = run("git", args, { cwd, encoding: "utf8" });
+  const result = run("git", args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: MAX_GIT_OUTPUT_BYTES
+  });
   if ((result.status ?? 1) !== 0) {
     throw new Error(formatRunnerError(result, `git ${args.join(" ")} failed`));
   }
   return result.stdout ?? "";
+}
+
+function truncateTrackedText(text, maxBytes, label) {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) {
+    return text;
+  }
+
+  const truncated = buffer.subarray(0, maxBytes).toString("utf8");
+  const normalized = truncated.endsWith("\n") ? truncated : `${truncated}\n`;
+  return `${normalized}[truncated ${label}: ${buffer.length} bytes exceeds ${maxBytes}-byte review limit]\n`;
 }
 
 function normalizeRelativePath(relativePath) {
@@ -142,15 +160,35 @@ export function buildReviewInput({ cwd, baseRef = null, run = spawnSync, readFil
     return {
       target: `${baseRef}...HEAD`,
       statusText: `Range review: ${baseRef}...HEAD`,
-      diffStatText: runGit(cwd, ["diff", "--stat", "--no-ext-diff", `${baseRef}...HEAD`], run),
-      diffText: runGit(cwd, ["diff", "--no-ext-diff", `${baseRef}...HEAD`], run)
+      diffStatText: truncateTrackedText(
+        runGit(cwd, ["diff", "--stat", "--no-ext-diff", `${baseRef}...HEAD`], run),
+        MAX_TRACKED_DIFF_STAT_BYTES,
+        "tracked diff stat"
+      ),
+      diffText: truncateTrackedText(
+        runGit(cwd, ["diff", "--no-ext-diff", `${baseRef}...HEAD`], run),
+        MAX_TRACKED_DIFF_BYTES,
+        "tracked diff"
+      )
     };
   }
 
   const statusText = filterWorkingTreeStatusText(runGit(cwd, ["status", "--short"], run));
-  const diffStatText = runGit(cwd, ["diff", "--stat", "--no-ext-diff"], run);
-  const unstagedDiffText = runGit(cwd, ["diff", "--no-ext-diff"], run);
-  const stagedDiffText = runGit(cwd, ["diff", "--cached", "--no-ext-diff"], run);
+  const diffStatText = truncateTrackedText(
+    runGit(cwd, ["diff", "--stat", "--no-ext-diff"], run),
+    MAX_TRACKED_DIFF_STAT_BYTES,
+    "tracked diff stat"
+  );
+  const unstagedDiffText = truncateTrackedText(
+    runGit(cwd, ["diff", "--no-ext-diff"], run),
+    MAX_TRACKED_DIFF_BYTES,
+    "tracked diff"
+  );
+  const stagedDiffText = truncateTrackedText(
+    runGit(cwd, ["diff", "--cached", "--no-ext-diff"], run),
+    MAX_TRACKED_DIFF_BYTES,
+    "tracked diff"
+  );
   const untrackedSection = buildUntrackedSection({ cwd, run, readFile });
 
   return {

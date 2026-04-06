@@ -128,6 +128,13 @@ function formatClaudeFailure(result) {
   return `Claude command failed with exit code ${result.exitCode ?? "unknown"}`;
 }
 
+function ensureRepositoryOrThrow({ cwd, deps }) {
+  const repository = deps.checkGitRepository({ cwd });
+  if (!repository.valid) {
+    throw new Error(repository.error);
+  }
+}
+
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -211,7 +218,8 @@ async function handleSetup({ paths, stdio, deps, binary, config, cwd }) {
   );
 }
 
-async function handleStatus({ paths, stdio }) {
+async function handleStatus({ cwd, paths, stdio, deps }) {
+  ensureRepositoryOrThrow({ cwd, deps });
   ensureStateDirs(paths);
   const jobs = listJobRecords({ jobsDir: paths.jobsDir });
   writeLine(stdio, renderStatusReport(jobs));
@@ -246,6 +254,7 @@ async function handleCancel({ paths, stdio, jobId, deps }) {
 }
 
 async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps }) {
+  ensureRepositoryOrThrow({ cwd, deps });
   ensureStateDirs(paths);
 
   const job = prepareReviewJob({
@@ -263,12 +272,27 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
   enqueueReviewJob({ jobsDir: paths.jobsDir, job });
 
   if (parsed.options.background) {
-    const child = deps.spawnDetachedWorker({
-      nodeBinary: process.execPath,
-      scriptPath: SCRIPT_PATH,
-      workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
-      cwd
-    });
+    let child;
+    try {
+      child = deps.spawnDetachedWorker({
+        nodeBinary: process.execPath,
+        scriptPath: SCRIPT_PATH,
+        workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
+        cwd
+      });
+    } catch (error) {
+      updateJobRecord({
+        jobsDir: paths.jobsDir,
+        jobId: job.id,
+        patch: {
+          status: "failed",
+          pid: null,
+          stderrTail: (error?.message ?? String(error)).slice(-2000),
+          finishedAt: new Date().toISOString()
+        }
+      });
+      throw error;
+    }
 
     updateJobRecord({
       jobsDir: paths.jobsDir,
@@ -305,6 +329,7 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
 
 async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps }) {
   const taskText = requireTaskDescription(parsed.positionals);
+  ensureRepositoryOrThrow({ cwd, deps });
   ensureStateDirs(paths);
 
   const job = prepareDelegateJob({
@@ -321,12 +346,27 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
   enqueueDelegateJob({ jobsDir: paths.jobsDir, job });
 
   if (parsed.options.background) {
-    const child = deps.spawnDetachedWorker({
-      nodeBinary: process.execPath,
-      scriptPath: SCRIPT_PATH,
-      workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
-      cwd
-    });
+    let child;
+    try {
+      child = deps.spawnDetachedWorker({
+        nodeBinary: process.execPath,
+        scriptPath: SCRIPT_PATH,
+        workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
+        cwd
+      });
+    } catch (error) {
+      updateJobRecord({
+        jobsDir: paths.jobsDir,
+        jobId: job.id,
+        patch: {
+          status: "failed",
+          pid: null,
+          stderrTail: (error?.message ?? String(error)).slice(-2000),
+          finishedAt: new Date().toISOString()
+        }
+      });
+      throw error;
+    }
 
     updateJobRecord({
       jobsDir: paths.jobsDir,
@@ -415,7 +455,7 @@ export async function main(argv, injected = {}) {
     case "setup":
       return handleSetup({ paths, stdio, deps, binary, config, cwd });
     case "status":
-      return handleStatus({ paths, stdio });
+      return handleStatus({ cwd, paths, stdio, deps });
     case "result":
       return handleResult({
         paths,

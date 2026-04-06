@@ -274,6 +274,40 @@ test("buildReviewInput skips binary untracked files with an explicit note", () =
   assert.doesNotMatch(result.diffText, /\x00/);
 });
 
+test("buildReviewInput truncates large tracked diffs and requests a larger git buffer", () => {
+  const seenBuffers = [];
+  const largeDiff = `@@ -1 +1 @@\n-${"old\n".repeat(40000)}+new\n`;
+  const largeStat = `${" src/index.js | 99999 +".repeat(2000)}\n`;
+
+  const run = (_binary, args, options) => {
+    seenBuffers.push(options.maxBuffer);
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "M src/index.js\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: largeStat, stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: largeDiff, stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: "/tmp/project", run });
+
+  assert.equal(seenBuffers.every((value) => typeof value === "number" && value > 1024 * 1024), true);
+  assert.match(result.diffText, /\[truncated/i);
+  assert.match(result.diffStatText, /\[truncated/i);
+  assert.equal(result.diffText.length < largeDiff.length, true);
+  assert.equal(result.diffStatText.length < largeStat.length, true);
+});
+
 test("buildReviewInput keeps base-ref reviews scoped to the range even when the tree is dirty", () => {
   const seen = [];
   const run = (_binary, args) => {
