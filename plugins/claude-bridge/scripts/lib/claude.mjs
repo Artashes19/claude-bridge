@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 
+const DEFAULT_READINESS_TIMEOUT_MS = 5000;
+
 function formatRunnerError(result) {
   const stderr = (result.stderr ?? "").trim();
   if (stderr) {
@@ -38,6 +40,7 @@ export function checkClaudeReadiness({
   model,
   effort,
   cwd = process.cwd(),
+  timeoutMs = DEFAULT_READINESS_TIMEOUT_MS,
   checkClaudeAvailability: checkAvailability = checkClaudeAvailability,
   runClaudeForeground: runForeground = runClaudeForeground
 }) {
@@ -57,7 +60,8 @@ export function checkClaudeReadiness({
       effort,
       prompt: "Reply with exactly: ready."
     }),
-    cwd
+    cwd,
+    timeoutMs
   });
 
   if (probe.exitCode === 0) {
@@ -104,12 +108,17 @@ export function buildDelegateClaudeArgs({ model, effort, prompt }) {
   ];
 }
 
-export function runClaudeForeground({ binary, args, cwd, run = spawnSync }) {
-  const result = run(binary, args, { cwd, encoding: "utf8" });
+export function runClaudeForeground({ binary, args, cwd, timeoutMs, run = spawnSync }) {
+  const result = run(binary, args, {
+    cwd,
+    encoding: "utf8",
+    ...(timeoutMs ? { timeout: timeoutMs } : {})
+  });
   return {
     exitCode: result.status ?? 1,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? ""
+    stderr: result.stderr ?? "",
+    error: result.error
   };
 }
 

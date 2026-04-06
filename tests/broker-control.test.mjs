@@ -31,21 +31,47 @@ test("setup prints readiness information", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-setup-"));
   const repoRoot = path.join(tempRoot, "repo");
   fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(repoRoot, ".claude-bridge"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, ".claude-bridge", "config.json"),
+    JSON.stringify({
+      models: {
+        aliases: {
+          reviewProbe: "claude-haiku-latest"
+        },
+        defaults: {
+          review: "reviewProbe"
+        }
+      },
+      runtime: {
+        defaultEffort: "medium",
+        claudeBinary: "claude-from-config"
+      }
+    })
+  );
 
   const out = createStdoutBuffer();
+  let seenReadinessArgs = null;
 
   await main(["setup", "--cwd", repoRoot], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
-    checkClaudeReadiness: () => ({
-      ready: true,
-      version: "2.1.92 (Claude Code)",
-      error: ""
-    })
+    checkClaudeReadiness: (args) => {
+      seenReadinessArgs = args;
+      return {
+        ready: true,
+        version: "2.1.92 (Claude Code)",
+        error: ""
+      };
+    }
   });
 
   assert.match(out.text(), /Claude Bridge setup/);
   assert.match(out.text(), /READY: yes/);
+  assert.deepEqual(seenReadinessArgs.binary, "claude-from-config");
+  assert.deepEqual(seenReadinessArgs.model, "claude-haiku-latest");
+  assert.deepEqual(seenReadinessArgs.effort, "medium");
+  assert.deepEqual(seenReadinessArgs.cwd, repoRoot);
 });
 
 test("setup reports auth failures clearly when Claude cannot run a prompt", async () => {

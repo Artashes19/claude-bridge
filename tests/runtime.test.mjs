@@ -8,7 +8,8 @@ import {
   buildDelegateClaudeArgs,
   buildReviewClaudeArgs,
   checkClaudeAvailability,
-  checkClaudeReadiness
+  checkClaudeReadiness,
+  runClaudeForeground
 } from "../plugins/claude-bridge/scripts/lib/claude.mjs";
 import { buildReviewInput } from "../plugins/claude-bridge/scripts/lib/git.mjs";
 import {
@@ -45,6 +46,27 @@ test("checkClaudeAvailability surfaces runner diagnostics when the binary is mis
   assert.equal(result.error, "spawn claude ENOENT");
 });
 
+test("runClaudeForeground passes timeout through to the runner and preserves runner errors", () => {
+  const result = runClaudeForeground({
+    binary: "claude",
+    args: ["-p", "probe"],
+    cwd: "/tmp/project",
+    timeoutMs: 4321,
+    run: (_binary, _args, options) => {
+      assert.equal(options.timeout, 4321);
+      return {
+        status: null,
+        stdout: "",
+        stderr: "",
+        error: { code: "ETIMEDOUT", message: "spawnSync claude ETIMEDOUT" }
+      };
+    }
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.error?.code, "ETIMEDOUT");
+});
+
 test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in", () => {
   const calls = [];
 
@@ -57,8 +79,8 @@ test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in",
       version: "2.1.92 (Claude Code)",
       error: ""
     }),
-    runClaudeForeground: ({ binary, args, cwd }) => {
-      calls.push({ binary, args, cwd });
+    runClaudeForeground: ({ binary, args, cwd, timeoutMs }) => {
+      calls.push({ binary, args, cwd, timeoutMs });
       return {
         exitCode: 1,
         stdout: "",
@@ -71,6 +93,7 @@ test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in",
   assert.equal(result.version, "2.1.92 (Claude Code)");
   assert.match(result.error, /Not logged in/);
   assert.deepEqual(calls[0].binary, "claude");
+  assert.equal(calls[0].timeoutMs, 5000);
   assert.deepEqual(calls[0].args.slice(0, 9), [
     "-p",
     "--model",
