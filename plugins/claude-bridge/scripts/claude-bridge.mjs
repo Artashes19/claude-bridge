@@ -32,6 +32,10 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_CANCEL_TIMEOUT_MS = 2000;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
 
+function isTerminalJobStatus(status) {
+  return status === "completed" || status === "failed" || status === "canceled";
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
@@ -178,7 +182,7 @@ async function handleResult({ paths, stdio, jobId }) {
 
 async function handleCancel({ paths, stdio, jobId, deps }) {
   const job = resolveJobOrThrow({ paths, jobId });
-  if (job.pid) {
+  if (job.pid && !isTerminalJobStatus(job.status)) {
     await waitForProcessGroupExit({
       pid: job.pid,
       killProcess: deps.killProcess,
@@ -230,6 +234,15 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
       patch: { pid: child.pid }
     });
 
+    const currentJob = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+    if (isTerminalJobStatus(currentJob.status) && currentJob.pid === child.pid) {
+      updateJobRecord({
+        jobsDir: paths.jobsDir,
+        jobId: job.id,
+        patch: { pid: null }
+      });
+    }
+
     writeLine(stdio, `Started review job ${job.id}`);
     return;
   }
@@ -278,6 +291,15 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
       jobId: job.id,
       patch: { pid: child.pid }
     });
+
+    const currentJob = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+    if (isTerminalJobStatus(currentJob.status) && currentJob.pid === child.pid) {
+      updateJobRecord({
+        jobsDir: paths.jobsDir,
+        jobId: job.id,
+        patch: { pid: null }
+      });
+    }
 
     writeLine(stdio, `Started delegate job ${job.id}`);
     return;

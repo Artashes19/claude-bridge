@@ -198,6 +198,50 @@ test("cancel signals the process group and waits for termination confirmation be
   assert.equal(stored.finishedAt.length > 0, true);
 });
 
+test("cancel ignores terminal jobs even when their record still has a pid", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-cancel-terminal-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  const job = createJobRecord({
+    kind: "review",
+    cwd: repoRoot,
+    summary: "Ignore stale pid on terminal job",
+    model: "claude-opus-latest"
+  });
+  job.pid = 8801;
+  job.status = "completed";
+  job.outputFile = path.join(paths.outputDir, `${job.id}.txt`);
+  job.finishedAt = "2026-04-05T00:00:00.000Z";
+  fs.writeFileSync(path.join(paths.jobsDir, `${job.id}.json`), JSON.stringify(job, null, 2));
+
+  const out = createStdoutBuffer();
+  const killCalls = [];
+  const originalKill = process.kill;
+  process.kill = (pid, signal) => {
+    killCalls.push([pid, signal]);
+  };
+
+  try {
+    await main(["cancel", "--cwd", repoRoot, "--job-id", job.id], {
+      homeDir: path.join(tempRoot, "home"),
+      stdio: out
+    });
+  } finally {
+    process.kill = originalKill;
+  }
+
+  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+
+  assert.deepEqual(killCalls, []);
+  assert.match(out.text(), new RegExp(`Requested cancellation for ${job.id}`));
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.pid, 8801);
+});
+
 test("cancel throws instead of marking canceled when termination is not confirmed in time", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-cancel-timeout-"));
   const repoRoot = path.join(tempRoot, "repo");

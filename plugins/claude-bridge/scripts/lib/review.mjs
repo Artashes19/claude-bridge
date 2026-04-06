@@ -80,6 +80,7 @@ export function runPreparedReviewJob({
     patch: {
       status: result.exitCode === 0 ? "completed" : "failed",
       outputFile,
+      pid: null,
       stderrTail: result.stderr.slice(-2000),
       finishedAt: new Date().toISOString()
     }

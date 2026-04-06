@@ -127,6 +127,6 @@ test("review background enqueues a worker job", async () => {
 
   assert.equal(job.kind, "review");
   assert.equal(job.status, "completed");
-  assert.equal(job.pid, 4242);
+  assert.equal(job.pid, null);
   assert.match(outputText, /High: validate the cache invalidation path/);
 });

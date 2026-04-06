@@ -233,6 +233,6 @@ test("delegate background preserves the worker result when the worker finishes q
 
   assert.equal(job.kind, "delegate");
   assert.equal(job.status, "completed");
-  assert.equal(job.pid, 5150);
+  assert.equal(job.pid, null);
   assert.match(outputText, /Updated tests\/cache\.test\.js/);
 });
