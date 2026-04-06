@@ -36,3 +36,10 @@ test("installation docs explain the home install path model", () => {
   assert.match(readme, /"\.\/plugins\/claude-bridge" resolves to ~\/plugins\/claude-bridge/);
   assert.match(pluginReadme, /installed to ~\/plugins\/claude-bridge/);
 });
+
+test("repository includes the MIT license text referenced by the manifest", () => {
+  const license = fs.readFileSync("LICENSE", "utf8");
+
+  assert.match(license, /^MIT License/);
+  assert.match(license, /Permission is hereby granted, free of charge/);
+});

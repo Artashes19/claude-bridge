@@ -25,12 +25,19 @@ export function renderStatusReport(jobs) {
 }
 
 export function renderResultReport(job, outputText) {
-  return [
+  const sections = [
     `Job: ${job.id}`,
     `Kind: ${job.kind}`,
     `Status: ${job.status}`,
-    `Model: ${job.model}`,
-    "",
-    outputText || "(no output stored)"
-  ].join("\n");
+    `Model: ${job.model}`
+  ];
+
+  const stderrText = (job.stderrTail ?? "").trim();
+  if (job.status === "failed" && stderrText) {
+    sections.push("", "Diagnostics:", stderrText);
+  }
+
+  sections.push("", outputText || "(no output stored)");
+
+  return sections.join("\n");
 }

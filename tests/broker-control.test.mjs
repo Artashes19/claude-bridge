@@ -143,7 +143,7 @@ test("cancel ignores ESRCH when the worker is already gone", async () => {
   assert.match(out.text(), new RegExp(`Requested cancellation for ${job.id}`));
 });
 
-test("cancel persists a canceled job record when the job has a pid", async () => {
+test("cancel signals the process group and waits for termination confirmation before persisting canceled", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-cancel-state-"));
   const repoRoot = path.join(tempRoot, "repo");
   fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
@@ -165,14 +165,26 @@ test("cancel persists a canceled job record when the job has a pid", async () =>
   const out = createStdoutBuffer();
   const killCalls = [];
   const originalKill = process.kill;
+  let probeCount = 0;
   process.kill = (pid, signal) => {
     killCalls.push([pid, signal]);
+    if (signal === 0) {
+      probeCount += 1;
+      if (probeCount === 1) {
+        return;
+      }
+
+      const error = new Error("process gone");
+      error.code = "ESRCH";
+      throw error;
+    }
   };
 
   try {
     await main(["cancel", "--cwd", repoRoot, "--job-id", job.id], {
       homeDir: path.join(tempRoot, "home"),
-      stdio: out
+      stdio: out,
+      sleep: async () => {}
     });
   } finally {
     process.kill = originalKill;
@@ -180,8 +192,84 @@ test("cancel persists a canceled job record when the job has a pid", async () =>
 
   const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
 
-  assert.deepEqual(killCalls, [[7777, "SIGTERM"]]);
+  assert.deepEqual(killCalls, [[-7777, "SIGTERM"], [-7777, 0], [-7777, 0]]);
   assert.match(out.text(), new RegExp(`Requested cancellation for ${job.id}`));
   assert.equal(stored.status, "canceled");
   assert.equal(stored.finishedAt.length > 0, true);
+});
+
+test("cancel throws instead of marking canceled when termination is not confirmed in time", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-cancel-timeout-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  const job = createJobRecord({
+    kind: "review",
+    cwd: repoRoot,
+    summary: "Cancel but stay alive",
+    model: "claude-opus-latest"
+  });
+  job.pid = 9911;
+  job.status = "running";
+  job.startedAt = "2026-04-05T00:00:00.000Z";
+  fs.writeFileSync(path.join(paths.jobsDir, `${job.id}.json`), JSON.stringify(job, null, 2));
+
+  const out = createStdoutBuffer();
+  const originalKill = process.kill;
+  process.kill = () => {};
+
+  try {
+    await assert.rejects(
+      () =>
+        main(["cancel", "--cwd", repoRoot, "--job-id", job.id], {
+          homeDir: path.join(tempRoot, "home"),
+          stdio: out,
+          sleep: async () => {},
+          cancelTimeoutMs: 0,
+          cancelPollIntervalMs: 0
+        }),
+      /Failed to confirm cancellation/
+    );
+  } finally {
+    process.kill = originalKill;
+  }
+
+  const stored = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
+
+  assert.equal(stored.status, "running");
+  assert.equal(stored.finishedAt, null);
+  assert.equal(out.text(), "");
+});
+
+test("result renders stderr diagnostics for failed jobs", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-result-stderr-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+
+  const job = createJobRecord({
+    kind: "delegate",
+    cwd: repoRoot,
+    summary: "Show failed diagnostics",
+    model: "claude-sonnet-latest"
+  });
+  job.status = "failed";
+  job.stderrTail = "Not logged in · Please run /login";
+  job.finishedAt = "2026-04-05T00:00:00.000Z";
+  fs.writeFileSync(path.join(paths.jobsDir, `${job.id}.json`), JSON.stringify(job, null, 2));
+
+  const out = createStdoutBuffer();
+
+  await main(["result", "--cwd", repoRoot, "--job-id", job.id], {
+    homeDir: path.join(tempRoot, "home"),
+    stdio: out
+  });
+
+  assert.match(out.text(), /Status: failed/);
+  assert.match(out.text(), /Not logged in · Please run \/login/);
 });

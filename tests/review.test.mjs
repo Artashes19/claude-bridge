@@ -51,6 +51,42 @@ test("review foreground stores a completed job and writes review output", async 
   assert.match(outputText, /High: add a regression test/);
 });
 
+test("review foreground rejects and prefers stderr diagnostics on Claude failure", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-fail-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["review", "--cwd", repoRoot, "look for auth blockers"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        buildReviewInput: () => ({
+          target: "working tree",
+          statusText: "",
+          diffStatText: "",
+          diffText: ""
+        }),
+        runClaudeForeground: () => ({
+          exitCode: 1,
+          stdout: "stdout fallback should not be used\n",
+          stderr: "Not logged in · Please run /login\n"
+        })
+      }),
+    /Not logged in · Please run \/login/
+  );
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.status, "failed");
+  assert.match(job.stderrTail, /Not logged in/);
+  assert.equal(out.text(), "");
+});
+
 test("review background enqueues a worker job", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-bg-"));
   const repoRoot = path.join(tempRoot, "repo");

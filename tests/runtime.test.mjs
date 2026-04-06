@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 
 import {
   buildDelegateClaudeArgs,
@@ -57,6 +60,9 @@ test("buildReviewInput captures git status and both unstaged and staged diffs", 
     if (args.join(" ") === "diff --cached --no-ext-diff") {
       return { status: 0, stdout: "", stderr: "" };
     }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
     throw new Error(`Unexpected git call: ${args.join(" ")}`);
   };
 
@@ -65,7 +71,40 @@ test("buildReviewInput captures git status and both unstaged and staged diffs", 
   assert.match(result.statusText, /M src\/index\.js/);
   assert.match(result.diffStatText, /src\/index\.js/);
   assert.match(result.diffText, /\+new/);
-  assert.equal(seen.length, 4);
+  assert.equal(seen.length, 5);
+});
+
+test("buildReviewInput appends untracked file contents in a dedicated section", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-input-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  const newFile = path.join(repoRoot, "notes.txt");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  fs.writeFileSync(newFile, "brand new reviewable content\n");
+
+  const run = (_binary, args) => {
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "?? notes.txt\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: "notes.txt\u0000", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: repoRoot, run });
+
+  assert.match(result.diffText, /## Untracked/);
+  assert.match(result.diffText, /notes\.txt/);
+  assert.match(result.diffText, /brand new reviewable content/);
 });
 
 test("buildReviewInput keeps base-ref reviews scoped to the range even when the tree is dirty", () => {

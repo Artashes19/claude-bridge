@@ -42,6 +42,36 @@ test("delegate foreground stores a completed job and prints Claude output", asyn
   assert.equal(job.status, "completed");
 });
 
+test("delegate foreground rejects and falls back to stdout diagnostics on Claude failure", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-fail-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["delegate", "--cwd", repoRoot, "fix auth flow"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        runClaudeForeground: () => ({
+          exitCode: 1,
+          stdout: "Claude hit a policy blocker while editing\n",
+          stderr: ""
+        })
+      }),
+    /Claude hit a policy blocker while editing/
+  );
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.kind, "delegate");
+  assert.equal(job.status, "failed");
+  assert.equal(out.text(), "");
+});
+
 test("delegate --resume latest selects the newest completed output by finishedAt", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-resume-"));
   const repoRoot = path.join(tempRoot, "repo");

@@ -29,6 +29,8 @@ import {
 } from "./lib/render.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const DEFAULT_CANCEL_TIMEOUT_MS = 2000;
+const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -93,6 +95,61 @@ function requireTaskDescription(positionals) {
   return taskText;
 }
 
+function formatClaudeFailure(result) {
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  const stdout = (result.stdout ?? "").trim();
+  if (stdout) {
+    return stdout;
+  }
+
+  return `Claude command failed with exit code ${result.exitCode ?? "unknown"}`;
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForProcessGroupExit({
+  pid,
+  killProcess,
+  sleep,
+  timeoutMs,
+  pollIntervalMs
+}) {
+  const processGroupId = -Math.abs(pid);
+
+  try {
+    killProcess(processGroupId, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return;
+    }
+    throw error;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      killProcess(processGroupId, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return;
+      }
+      throw error;
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Failed to confirm cancellation for ${Math.abs(pid)} within ${timeoutMs}ms`);
+    }
+
+    await sleep(pollIntervalMs);
+  }
+}
+
 async function handleSetup({ paths, stdio, deps, binary }) {
   ensureStateDirs(paths);
   const availability = deps.checkClaudeAvailability({ binary });
@@ -119,16 +176,17 @@ async function handleResult({ paths, stdio, jobId }) {
   writeLine(stdio, renderResultReport(job, readJobOutput(job)));
 }
 
-async function handleCancel({ paths, stdio, jobId }) {
+async function handleCancel({ paths, stdio, jobId, deps }) {
   const job = resolveJobOrThrow({ paths, jobId });
   if (job.pid) {
-    try {
-      process.kill(job.pid, "SIGTERM");
-    } catch (error) {
-      if (error?.code !== "ESRCH") {
-        throw error;
-      }
-    }
+    await waitForProcessGroupExit({
+      pid: job.pid,
+      killProcess: deps.killProcess,
+      sleep: deps.sleep,
+      timeoutMs: deps.cancelTimeoutMs,
+      pollIntervalMs: deps.cancelPollIntervalMs
+    });
+
     updateJobRecord({
       jobsDir: paths.jobsDir,
       jobId: job.id,
@@ -183,6 +241,10 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
     runClaudeForeground: deps.runClaudeForeground
   });
 
+  if (result.exitCode !== 0) {
+    throw new Error(formatClaudeFailure(result));
+  }
+
   writeLine(stdio, result.stdout);
 }
 
@@ -228,6 +290,10 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
     runClaudeForeground: deps.runClaudeForeground
   });
 
+  if (result.exitCode !== 0) {
+    throw new Error(formatClaudeFailure(result));
+  }
+
   writeLine(stdio, result.stdout);
 }
 
@@ -266,7 +332,11 @@ export async function main(argv, injected = {}) {
     checkClaudeAvailability: injected.checkClaudeAvailability ?? checkClaudeAvailability,
     runClaudeForeground: injected.runClaudeForeground ?? defaultRunClaudeForeground,
     spawnDetachedWorker: injected.spawnDetachedWorker ?? defaultSpawnDetachedWorker,
-    buildReviewInput: injected.buildReviewInput ?? defaultBuildReviewInput
+    buildReviewInput: injected.buildReviewInput ?? defaultBuildReviewInput,
+    killProcess: injected.killProcess ?? process.kill.bind(process),
+    sleep: injected.sleep ?? defaultSleep,
+    cancelTimeoutMs: injected.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS,
+    cancelPollIntervalMs: injected.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS
   };
   const paths = resolvePaths({ cwd, homeDir });
   const config = loadMergedConfig({
@@ -290,7 +360,8 @@ export async function main(argv, injected = {}) {
       return handleCancel({
         paths,
         stdio,
-        jobId: requireStringOption(parsed.options, "job-id", "cancel")
+        jobId: requireStringOption(parsed.options, "job-id", "cancel"),
+        deps
       });
     case "review":
       return handleReview({ parsed, cwd, paths, config, binary, stdio, deps });

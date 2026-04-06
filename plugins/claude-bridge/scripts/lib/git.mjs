@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 function formatRunnerError(result, fallbackMessage) {
@@ -27,7 +29,34 @@ function runGit(cwd, args, run) {
   return result.stdout ?? "";
 }
 
-export function buildReviewInput({ cwd, baseRef = null, run = spawnSync }) {
+function readUntrackedFileText(cwd, relativePath, readFile) {
+  try {
+    return readFile(path.join(cwd, relativePath), "utf8");
+  } catch (error) {
+    return `[unable to read ${relativePath}: ${error?.message ?? String(error)}]\n`;
+  }
+}
+
+function buildUntrackedSection({ cwd, run, readFile }) {
+  const untrackedFiles = runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], run)
+    .split("\0")
+    .filter(Boolean);
+
+  if (untrackedFiles.length === 0) {
+    return "";
+  }
+
+  return [
+    "## Untracked",
+    ...untrackedFiles.map((relativePath) => {
+      const text = readUntrackedFileText(cwd, relativePath, readFile);
+      const normalized = text.endsWith("\n") ? text : `${text}\n`;
+      return `### ${relativePath}\n${normalized}`;
+    })
+  ].join("\n");
+}
+
+export function buildReviewInput({ cwd, baseRef = null, run = spawnSync, readFile = fs.readFileSync }) {
   if (baseRef) {
     return {
       target: `${baseRef}...HEAD`,
@@ -37,16 +66,23 @@ export function buildReviewInput({ cwd, baseRef = null, run = spawnSync }) {
     };
   }
 
+  const statusText = runGit(cwd, ["status", "--short"], run);
+  const diffStatText = runGit(cwd, ["diff", "--stat", "--no-ext-diff"], run);
+  const unstagedDiffText = runGit(cwd, ["diff", "--no-ext-diff"], run);
+  const stagedDiffText = runGit(cwd, ["diff", "--cached", "--no-ext-diff"], run);
+  const untrackedSection = buildUntrackedSection({ cwd, run, readFile });
+
   return {
     target: "working tree",
-    statusText: runGit(cwd, ["status", "--short"], run),
-    diffStatText: runGit(cwd, ["diff", "--stat", "--no-ext-diff"], run),
+    statusText,
+    diffStatText,
     diffText: [
       "## Unstaged",
-      runGit(cwd, ["diff", "--no-ext-diff"], run),
+      unstagedDiffText,
       "",
       "## Staged",
-      runGit(cwd, ["diff", "--cached", "--no-ext-diff"], run)
+      stagedDiffText,
+      untrackedSection ? `\n${untrackedSection}` : ""
     ].join("\n")
   };
 }
