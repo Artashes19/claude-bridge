@@ -19,6 +19,10 @@ Claude Bridge is a Codex plugin that shells out to the local `claude` CLI for:
 - These examples assume the plugin has been installed to ~/plugins/claude-bridge.
 - In `~/.agents/plugins/marketplace.json`, `./plugins/claude-bridge` resolves to `~/plugins/claude-bridge`.
 
+## Publishing
+
+This repo is structured so it can be pushed to GitHub and shared directly. After cloning, friends can install the plugin by copying `plugins/claude-bridge/` into `~/plugins/claude-bridge/` and registering the matching marketplace entry from `.agents/plugins/marketplace.json`.
+
 ## Commands Behind The Skills
 
 - `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" setup --cwd "."`

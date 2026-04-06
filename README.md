@@ -56,6 +56,16 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
 
    `READY: yes` means the local Claude CLI is installed, reports its version, and can execute a prompt using the current repo's read-only review defaults in `--cwd` (including the resolved model and default effort). If `--cwd` is not inside a Git repo, or if you see `READY: no` with `Not logged in · Please run /login`, fix that repo/auth state and rerun the command there.
 
+## Sharing The Repo
+
+This repository is ready to publish on GitHub as-is. Once it is pushed, friends can clone it with:
+
+```bash
+git clone https://github.com/Artashes19/claude-bridge.git
+```
+
+Then they can follow the install steps above to copy `plugins/claude-bridge/` into their own `~/plugins/claude-bridge/` directory and add the matching marketplace entry from `.agents/plugins/marketplace.json`.
+
 ## Config
 
 Repo-local config:
