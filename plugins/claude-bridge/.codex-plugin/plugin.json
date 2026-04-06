@@ -1,17 +1,18 @@
 {
   "name": "claude-bridge",
-  "version": "0.1.0",
-  "description": "Run local Claude Code review and delegation flows from Codex.",
+  "version": "0.2.0",
+  "description": "Run local Claude Code review and delegation flows from Codex via MCP.",
   "author": {
     "name": "Artashes Mkrtchyan"
   },
   "repository": "https://github.com/Artashes19/claude-bridge",
   "license": "MIT",
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Claude Bridge",
     "shortDescription": "Use Claude Code from inside Codex",
-    "longDescription": "Read-only Claude reviews, writable Claude delegation, and lightweight local job tracking for Codex users.",
+    "longDescription": "Read-only Claude reviews, writable Claude delegation, and lightweight local job tracking for Codex users. Uses an MCP stdio server for host-level Claude CLI access.",
     "developerName": "Artashes Mkrtchyan",
     "category": "Coding",
     "capabilities": ["Interactive", "Write"],

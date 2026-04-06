@@ -7,14 +7,18 @@ description: Use when the user wants Claude Code to investigate, implement, or e
 
 Use this skill when the user wants Claude to make changes in the current working tree.
 
-Run:
+Use the `bridge_delegate` MCP tool:
 
-- `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" delegate --cwd "." --model sonnet "fix the failing test"`
-- `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" delegate --cwd "." --model opus --resume latest "finish the follow-up work"`
-- `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" delegate --cwd "." --background "investigate the flaky test"`
+- `bridge_delegate` with `task` (required), `cwd`, and optionally `model`, `effort`, `resume`, `background`
+- Example: `bridge_delegate` with `task: "fix the failing test"`, `model: "sonnet"`
+- Example: `bridge_delegate` with `task: "finish follow-up work"`, `resume: "latest"`, `model: "opus"`
+- Example: `bridge_delegate` with `task: "investigate the flaky test"`, `background: true`
 
 Notes:
 
-- Optional flags: `--model`, `--effort`, `--resume`, `--background`
-- Trailing text becomes the delegate task
-- If background mode is used, check `claude-status`, `claude-result`, and `claude-cancel`
+- If background mode is used, check `bridge_status`, `bridge_result`, and `bridge_cancel`
+- Available models: sonnet (default for delegate), opus, haiku
+
+Fallback (if MCP is unavailable):
+
+- `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" delegate --cwd "." --model sonnet "task"`

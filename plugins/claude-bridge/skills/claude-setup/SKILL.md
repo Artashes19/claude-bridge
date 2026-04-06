@@ -5,8 +5,12 @@ description: Use when the user wants to verify that Claude Bridge can run the lo
 
 # Claude Setup
 
-Run:
+Use the `bridge_setup` MCP tool:
+
+- `bridge_setup` with `cwd` set to the current working directory
+
+Expect the result to show `ready: true` when Claude Code is installed, authenticated, and the working directory is a Git repo. If `ready: false`, check the `error` field for details.
+
+Fallback (if MCP is unavailable):
 
 - `node "$HOME/plugins/claude-bridge/scripts/claude-bridge.mjs" setup --cwd "."`
-
-Expect `READY: yes` only when `--cwd` is inside a Git repo, Claude Code is installed, its version is reported, and the current repo's read-only review defaults in `--cwd` can execute a minimal probe. If the output shows `READY: no`, fix the repo/auth state and rerun the command in that repo.
