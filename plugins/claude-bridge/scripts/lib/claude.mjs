@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 
-const DEFAULT_READINESS_TIMEOUT_MS = 5000;
+const DEFAULT_READINESS_TIMEOUT_MS = 30000;
 
 function formatRunnerError(result) {
   const stderr = (result.stderr ?? "").trim();

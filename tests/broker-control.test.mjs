@@ -41,7 +41,7 @@ test("setup prints readiness information", async () => {
     JSON.stringify({
       models: {
         aliases: {
-          reviewProbe: "claude-haiku-latest"
+          reviewProbe: "claude-haiku-4-5-20251001"
         },
         defaults: {
           review: "reviewProbe"
@@ -74,7 +74,7 @@ test("setup prints readiness information", async () => {
   assert.match(out.text(), /Claude Bridge setup/);
   assert.match(out.text(), /READY: yes/);
   assert.deepEqual(seenReadinessArgs.binary, "claude-from-config");
-  assert.deepEqual(seenReadinessArgs.model, "claude-haiku-latest");
+  assert.deepEqual(seenReadinessArgs.model, "claude-haiku-4-5-20251001");
   assert.deepEqual(seenReadinessArgs.effort, "medium");
   assert.deepEqual(seenReadinessArgs.cwd, repoRoot);
 });
@@ -233,7 +233,7 @@ test("cancel ignores ESRCH when the worker is already gone", async () => {
     kind: "delegate",
     cwd: repoRoot,
     summary: "Cancel a stale worker",
-    model: "claude-sonnet-latest"
+    model: "claude-sonnet-4-6"
   });
   job.pid = 123456;
   fs.writeFileSync(path.join(paths.jobsDir, `${job.id}.json`), JSON.stringify(job, null, 2));
@@ -270,7 +270,7 @@ test("cancel signals the process group and waits for termination confirmation be
     kind: "delegate",
     cwd: repoRoot,
     summary: "Cancel and persist state",
-    model: "claude-sonnet-latest"
+    model: "claude-sonnet-4-6"
   });
   job.pid = 7777;
   job.status = "running";
@@ -325,7 +325,7 @@ test("cancel ignores terminal jobs even when their record still has a pid", asyn
     kind: "review",
     cwd: repoRoot,
     summary: "Ignore stale pid on terminal job",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   job.pid = 8801;
   job.status = "completed";
@@ -369,7 +369,7 @@ test("cancel throws instead of marking canceled when termination is not confirme
     kind: "review",
     cwd: repoRoot,
     summary: "Cancel but stay alive",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   job.pid = 9911;
   job.status = "running";
@@ -415,7 +415,7 @@ test("result renders stderr diagnostics for failed jobs", async () => {
     kind: "delegate",
     cwd: repoRoot,
     summary: "Show failed diagnostics",
-    model: "claude-sonnet-latest"
+    model: "claude-sonnet-4-6"
   });
   job.status = "failed";
   job.stderrTail = "Not logged in · Please run /login";

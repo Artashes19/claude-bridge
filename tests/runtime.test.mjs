@@ -73,7 +73,7 @@ test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in",
 
   const result = checkClaudeReadiness({
     binary: "claude",
-    model: "claude-opus-latest",
+    model: "claude-opus-4-6",
     effort: "high",
     checkClaudeAvailability: () => ({
       available: true,
@@ -94,11 +94,11 @@ test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in",
   assert.equal(result.version, "2.1.92 (Claude Code)");
   assert.match(result.error, /Not logged in/);
   assert.deepEqual(calls[0].binary, "claude");
-  assert.equal(calls[0].timeoutMs, 5000);
+  assert.equal(calls[0].timeoutMs, 30000);
   assert.deepEqual(calls[0].args.slice(0, 9), [
     "-p",
     "--model",
-    "claude-opus-latest",
+    "claude-opus-4-6",
     "--effort",
     "high",
     "--tools",
@@ -353,7 +353,7 @@ test("buildReviewInput preserves git runner diagnostics when a git command fails
 
 test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => {
   const args = buildReviewClaudeArgs({
-    model: "claude-opus-latest",
+    model: "claude-opus-4-6",
     effort: "high",
     prompt: "Review these changes."
   });
@@ -361,7 +361,7 @@ test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => 
   assert.deepEqual(args.slice(0, 9), [
     "-p",
     "--model",
-    "claude-opus-latest",
+    "claude-opus-4-6",
     "--effort",
     "high",
     "--tools",
@@ -373,7 +373,7 @@ test("buildReviewClaudeArgs disables Claude tools for read-only reviews", () => 
 
 test("buildDelegateClaudeArgs keeps Claude editable", () => {
   const args = buildDelegateClaudeArgs({
-    model: "claude-sonnet-latest",
+    model: "claude-sonnet-4-6",
     effort: "medium",
     prompt: "Fix the bug."
   });
@@ -381,7 +381,7 @@ test("buildDelegateClaudeArgs keeps Claude editable", () => {
   assert.deepEqual(args.slice(0, 7), [
     "-p",
     "--model",
-    "claude-sonnet-latest",
+    "claude-sonnet-4-6",
     "--effort",
     "medium",
     "--permission-mode",

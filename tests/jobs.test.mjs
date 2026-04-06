@@ -59,7 +59,7 @@ test("writeJobRecord, readJobRecord, updateJobRecord, and listJobRecords round-t
     kind: "review",
     cwd: repoRoot,
     summary: "Review older changes",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   olderJob.createdAt = "2024-01-01T00:00:00.000Z";
 
@@ -67,7 +67,7 @@ test("writeJobRecord, readJobRecord, updateJobRecord, and listJobRecords round-t
     kind: "review",
     cwd: repoRoot,
     summary: "Review newer changes",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   newerJob.createdAt = "2024-01-02T00:00:00.000Z";
 
@@ -159,7 +159,7 @@ test("updateJobRecord preserves identity fields and keeps a single stored record
     kind: "review",
     cwd: repoRoot,
     summary: "Protect identity fields",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   writeJobRecord({ jobsDir: paths.jobsDir, job });
 
@@ -196,7 +196,7 @@ test("updateJobRecord keeps concurrent readers from seeing partial JSON", async 
     kind: "review",
     cwd: repoRoot,
     summary: "Keep job reads consistent",
-    model: "claude-opus-latest"
+    model: "claude-opus-4-6"
   });
   writeJobRecord({ jobsDir: paths.jobsDir, job });
 

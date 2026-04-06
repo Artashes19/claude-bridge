@@ -3,9 +3,9 @@ import fs from "node:fs";
 export const DEFAULT_CONFIG = {
   models: {
     aliases: {
-      opus: "claude-opus-latest",
-      sonnet: "claude-sonnet-latest",
-      haiku: "claude-haiku-latest"
+      opus: "claude-opus-4-6",
+      sonnet: "claude-sonnet-4-6",
+      haiku: "claude-haiku-4-5-20251001"
     },
     defaults: {
       review: "opus",

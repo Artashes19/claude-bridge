@@ -68,9 +68,9 @@ test("resolveModel expands aliases and respects command defaults", () => {
   const config = {
     models: {
       aliases: {
-        opus: "claude-opus-latest",
-        sonnet: "claude-sonnet-latest",
-        haiku: "claude-haiku-latest"
+        opus: "claude-opus-4-6",
+        sonnet: "claude-sonnet-4-6",
+        haiku: "claude-haiku-4-5-20251001"
       },
       defaults: {
         review: "opus",
@@ -79,11 +79,11 @@ test("resolveModel expands aliases and respects command defaults", () => {
     }
   };
 
-  assert.equal(resolveModel({ command: "review", config }), "claude-opus-latest");
-  assert.equal(resolveModel({ command: "delegate", config }), "claude-sonnet-latest");
+  assert.equal(resolveModel({ command: "review", config }), "claude-opus-4-6");
+  assert.equal(resolveModel({ command: "delegate", config }), "claude-sonnet-4-6");
   assert.equal(
     resolveModel({ command: "review", requestedModel: "haiku", config }),
-    "claude-haiku-latest"
+    "claude-haiku-4-5-20251001"
   );
   assert.equal(
     resolveModel({ command: "review", requestedModel: "claude-sonnet-4-5", config }),
