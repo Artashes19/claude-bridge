@@ -5,10 +5,16 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkClaudeAvailability,
+  checkClaudeReadiness,
   runClaudeForeground as defaultRunClaudeForeground,
   spawnDetachedWorker as defaultSpawnDetachedWorker
 } from "./lib/claude.mjs";
-import { loadMergedConfig, resolveClaudeBinary } from "./lib/config.mjs";
+import {
+  loadMergedConfig,
+  resolveClaudeBinary,
+  resolveEffort,
+  resolveModel
+} from "./lib/config.mjs";
 import { buildReviewInput as defaultBuildReviewInput } from "./lib/git.mjs";
 import { listJobRecords, readJobRecord, resolveJobRecord, updateJobRecord } from "./lib/jobs.mjs";
 import { resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
@@ -154,17 +160,24 @@ async function waitForProcessGroupExit({
   }
 }
 
-async function handleSetup({ paths, stdio, deps, binary }) {
+async function handleSetup({ paths, stdio, deps, binary, config, cwd }) {
   ensureStateDirs(paths);
-  const availability = deps.checkClaudeAvailability({ binary });
+  const readiness = deps.checkClaudeReadiness({
+    binary,
+    model: resolveModel({ command: "review", config }),
+    effort: resolveEffort({ config }),
+    cwd,
+    checkClaudeAvailability: deps.checkClaudeAvailability,
+    runClaudeForeground: deps.runClaudeForeground
+  });
   writeLine(
     stdio,
     renderSetupReport({
-      ready: availability.available,
+      ready: readiness.ready,
       binary,
-      version: availability.version,
+      version: readiness.version,
       repoStateDir: paths.repoStateDir,
-      error: availability.error
+      error: readiness.error
     })
   );
 }
@@ -352,6 +365,7 @@ export async function main(argv, injected = {}) {
   const stdio = injected.stdio ?? { stdout: process.stdout, stderr: process.stderr };
   const deps = {
     checkClaudeAvailability: injected.checkClaudeAvailability ?? checkClaudeAvailability,
+    checkClaudeReadiness: injected.checkClaudeReadiness ?? checkClaudeReadiness,
     runClaudeForeground: injected.runClaudeForeground ?? defaultRunClaudeForeground,
     spawnDetachedWorker: injected.spawnDetachedWorker ?? defaultSpawnDetachedWorker,
     buildReviewInput: injected.buildReviewInput ?? defaultBuildReviewInput,
@@ -369,7 +383,7 @@ export async function main(argv, injected = {}) {
 
   switch (parsed.command) {
     case "setup":
-      return handleSetup({ paths, stdio, deps, binary });
+      return handleSetup({ paths, stdio, deps, binary, config, cwd });
     case "status":
       return handleStatus({ paths, stdio });
     case "result":

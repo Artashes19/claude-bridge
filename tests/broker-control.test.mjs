@@ -37,8 +37,8 @@ test("setup prints readiness information", async () => {
   await main(["setup", "--cwd", repoRoot], {
     homeDir: path.join(tempRoot, "home"),
     stdio: out,
-    checkClaudeAvailability: () => ({
-      available: true,
+    checkClaudeReadiness: () => ({
+      ready: true,
       version: "2.1.92 (Claude Code)",
       error: ""
     })
@@ -46,6 +46,28 @@ test("setup prints readiness information", async () => {
 
   assert.match(out.text(), /Claude Bridge setup/);
   assert.match(out.text(), /READY: yes/);
+});
+
+test("setup reports auth failures clearly when Claude cannot run a prompt", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-setup-auth-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await main(["setup", "--cwd", repoRoot], {
+    homeDir: path.join(tempRoot, "home"),
+    stdio: out,
+    checkClaudeReadiness: () => ({
+      ready: false,
+      version: "2.1.92 (Claude Code)",
+      error: "Claude prompt probe failed: Not logged in · Please run /login"
+    })
+  });
+
+  assert.match(out.text(), /READY: no/);
+  assert.match(out.text(), /CLAUDE VERSION: 2.1.92 \(Claude Code\)/);
+  assert.match(out.text(), /Not logged in/);
 });
 
 test("status prints no jobs yet when the repo has no state", async () => {

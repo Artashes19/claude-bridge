@@ -6,6 +6,11 @@ function formatRunnerError(result) {
     return stderr;
   }
 
+  const stdout = (result.stdout ?? "").trim();
+  if (stdout) {
+    return stdout;
+  }
+
   const error = result.error;
   if (!error) {
     return "";
@@ -25,6 +30,49 @@ export function checkClaudeAvailability({ binary, run = spawnSync }) {
     available: result.status === 0,
     version: (result.stdout ?? "").trim(),
     error: formatRunnerError(result)
+  };
+}
+
+export function checkClaudeReadiness({
+  binary,
+  model,
+  effort,
+  cwd = process.cwd(),
+  checkClaudeAvailability: checkAvailability = checkClaudeAvailability,
+  runClaudeForeground: runForeground = runClaudeForeground
+}) {
+  const availability = checkAvailability({ binary });
+  if (!availability.available) {
+    return {
+      ready: false,
+      version: availability.version,
+      error: availability.error
+    };
+  }
+
+  const probe = runForeground({
+    binary,
+    args: buildReviewClaudeArgs({
+      model,
+      effort,
+      prompt: "Reply with exactly: ready."
+    }),
+    cwd
+  });
+
+  if (probe.exitCode === 0) {
+    return {
+      ready: true,
+      version: availability.version,
+      error: ""
+    };
+  }
+
+  const probeError = formatRunnerError(probe) || `exit code ${probe.exitCode ?? "unknown"}`;
+  return {
+    ready: false,
+    version: availability.version,
+    error: `Claude prompt probe failed: ${probeError}`
   };
 }
 

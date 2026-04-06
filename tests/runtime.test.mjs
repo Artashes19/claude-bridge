@@ -7,7 +7,8 @@ import os from "node:os";
 import {
   buildDelegateClaudeArgs,
   buildReviewClaudeArgs,
-  checkClaudeAvailability
+  checkClaudeAvailability,
+  checkClaudeReadiness
 } from "../plugins/claude-bridge/scripts/lib/claude.mjs";
 import { buildReviewInput } from "../plugins/claude-bridge/scripts/lib/git.mjs";
 import {
@@ -42,6 +43,46 @@ test("checkClaudeAvailability surfaces runner diagnostics when the binary is mis
 
   assert.equal(result.available, false);
   assert.equal(result.error, "spawn claude ENOENT");
+});
+
+test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in", () => {
+  const calls = [];
+
+  const result = checkClaudeReadiness({
+    binary: "claude",
+    model: "claude-opus-latest",
+    effort: "high",
+    checkClaudeAvailability: () => ({
+      available: true,
+      version: "2.1.92 (Claude Code)",
+      error: ""
+    }),
+    runClaudeForeground: ({ binary, args, cwd }) => {
+      calls.push({ binary, args, cwd });
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "Not logged in · Please run /login"
+      };
+    }
+  });
+
+  assert.equal(result.ready, false);
+  assert.equal(result.version, "2.1.92 (Claude Code)");
+  assert.match(result.error, /Not logged in/);
+  assert.deepEqual(calls[0].binary, "claude");
+  assert.deepEqual(calls[0].args.slice(0, 9), [
+    "-p",
+    "--model",
+    "claude-opus-latest",
+    "--effort",
+    "high",
+    "--tools",
+    "",
+    "--permission-mode",
+    "plan"
+  ]);
+  assert.match(calls[0].args[9], /ready/i);
 });
 
 test("buildReviewInput captures git status and both unstaged and staged diffs", () => {

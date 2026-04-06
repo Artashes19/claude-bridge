@@ -11,6 +11,7 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
 - Codex installed locally
 - Claude Code installed locally
 - `claude` available on `PATH`
+- Claude Code authenticated so it can run a prompt; `setup` probes a minimal read-only prompt and will report `READY: no` until auth is in place
 - Node.js 18+ available on `PATH`
 
 ## Repository Layout
@@ -49,6 +50,8 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
    ```bash
    node ~/plugins/claude-bridge/scripts/claude-bridge.mjs setup --cwd "$PWD"
    ```
+
+   `READY: yes` means the local Claude CLI is installed, reports its version, and can execute a prompt with the bridge's read-only review settings. If you see `READY: no` with `Not logged in · Please run /login`, sign in to Claude Code and rerun the command.
 
 ## Config
 
