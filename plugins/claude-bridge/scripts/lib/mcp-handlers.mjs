@@ -18,6 +18,7 @@ import {
 import { buildReviewInput as defaultBuildReviewInput } from "./git.mjs";
 import {
   listJobRecords,
+  readJobRecord,
   resolveJobRecord,
   updateJobRecord,
 } from "./jobs.mjs";
@@ -39,6 +40,52 @@ import {
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CLI_SCRIPT = path.resolve(SCRIPT_DIR, "..", "claude-bridge.mjs");
+
+function isTerminalJobStatus(status) {
+  return status === "completed" || status === "failed" || status === "canceled";
+}
+
+function spawnBackgroundWorker({ deps, ctx, job }) {
+  let child;
+  try {
+    child = deps.spawnDetachedWorker({
+      nodeBinary: process.execPath,
+      scriptPath: CLI_SCRIPT,
+      workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
+      cwd: ctx.cwd,
+    });
+  } catch (err) {
+    updateJobRecord({
+      jobsDir: ctx.paths.jobsDir,
+      jobId: job.id,
+      patch: {
+        status: "failed",
+        pid: null,
+        stderrTail: (err?.message ?? String(err)).slice(-2000),
+        finishedAt: new Date().toISOString(),
+      },
+    });
+    return { jobId: job.id, status: "failed", error: err.message };
+  }
+
+  updateJobRecord({
+    jobsDir: ctx.paths.jobsDir,
+    jobId: job.id,
+    patch: { pid: child.pid },
+  });
+
+  // If the worker finished before we wrote the pid, clear it
+  const current = readJobRecord({ jobsDir: ctx.paths.jobsDir, jobId: job.id });
+  if (isTerminalJobStatus(current.status) && current.pid === child.pid) {
+    updateJobRecord({
+      jobsDir: ctx.paths.jobsDir,
+      jobId: job.id,
+      patch: { pid: null },
+    });
+  }
+
+  return { jobId: job.id, status: "queued", background: true };
+}
 
 function buildDeps(injected = {}) {
   return {
@@ -130,33 +177,7 @@ export async function handleReview({
   enqueueReviewJob({ jobsDir: ctx.paths.jobsDir, job });
 
   if (background) {
-    let child;
-    try {
-      child = deps.spawnDetachedWorker({
-        nodeBinary: process.execPath,
-        scriptPath: CLI_SCRIPT,
-        workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
-        cwd: ctx.cwd,
-      });
-    } catch (err) {
-      updateJobRecord({
-        jobsDir: ctx.paths.jobsDir,
-        jobId: job.id,
-        patch: {
-          status: "failed",
-          pid: null,
-          stderrTail: (err?.message ?? String(err)).slice(-2000),
-          finishedAt: new Date().toISOString(),
-        },
-      });
-      return { jobId: job.id, status: "failed", error: err.message };
-    }
-    updateJobRecord({
-      jobsDir: ctx.paths.jobsDir,
-      jobId: job.id,
-      patch: { pid: child.pid },
-    });
-    return { jobId: job.id, status: "queued", background: true };
+    return spawnBackgroundWorker({ deps, ctx, job });
   }
 
   const result = runPreparedReviewJob({
@@ -205,33 +226,7 @@ export async function handleDelegate({
   enqueueDelegateJob({ jobsDir: ctx.paths.jobsDir, job });
 
   if (background) {
-    let child;
-    try {
-      child = deps.spawnDetachedWorker({
-        nodeBinary: process.execPath,
-        scriptPath: CLI_SCRIPT,
-        workerArgs: ["worker", "--cwd", ctx.cwd, "--job-id", job.id],
-        cwd: ctx.cwd,
-      });
-    } catch (err) {
-      updateJobRecord({
-        jobsDir: ctx.paths.jobsDir,
-        jobId: job.id,
-        patch: {
-          status: "failed",
-          pid: null,
-          stderrTail: (err?.message ?? String(err)).slice(-2000),
-          finishedAt: new Date().toISOString(),
-        },
-      });
-      return { jobId: job.id, status: "failed", error: err.message };
-    }
-    updateJobRecord({
-      jobsDir: ctx.paths.jobsDir,
-      jobId: job.id,
-      patch: { pid: child.pid },
-    });
-    return { jobId: job.id, status: "queued", background: true };
+    return spawnBackgroundWorker({ deps, ctx, job });
   }
 
   const result = runPreparedDelegateJob({
@@ -338,16 +333,24 @@ export async function handleCancel({ cwd, homeDir, jobId, deps: injectedDeps } =
       if (err?.code !== "ESRCH") throw err;
     }
 
-    // Wait for process group to exit (up to 2s)
+    // Wait for process group to exit (up to 2s), matching CLI behavior
     const deadline = Date.now() + 2000;
+    let exited = false;
     while (Date.now() < deadline) {
       try {
         deps.killProcess(pgid, 0);
       } catch (err) {
-        if (err?.code === "ESRCH") break;
+        if (err?.code === "ESRCH") {
+          exited = true;
+          break;
+        }
         throw err;
       }
       await deps.sleep(100);
+    }
+
+    if (!exited) {
+      return { error: `Failed to confirm cancellation for ${Math.abs(job.pid)} within 2000ms` };
     }
   }
 
