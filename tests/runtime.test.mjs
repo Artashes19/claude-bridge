@@ -199,6 +199,8 @@ test("buildReviewInput omits bridge-local untracked artifacts from the review pr
 
   const result = buildReviewInput({ cwd: repoRoot, run });
 
+  assert.match(result.statusText, /notes\.txt/);
+  assert.doesNotMatch(result.statusText, /\.claude-bridge\/jobs\/latest\.json/);
   assert.match(result.diffText, /## Untracked/);
   assert.doesNotMatch(result.diffText, /\.claude-bridge\/jobs\/latest\.json/);
   assert.match(result.diffText, /notes\.txt/);

@@ -13,7 +13,7 @@ Claude Bridge is a Codex plugin that shells out to the local `claude` CLI for:
 - Repo-local config: `.claude-bridge/config.json`
 - Global config: `~/.claude-bridge/config.json`
 - `setup --cwd <repo>` verifies that repo's read-only review defaults can actually run, using the resolved review model, default effort, and Claude auth state for that repo context
-- Read-only review input omits repo-local `.claude-bridge/` artifacts and only inlines small text untracked files; larger, binary, or unreadable untracked files are replaced with a note
+- Read-only review input omits repo-local `.claude-bridge/` artifacts from the working-tree status text and only inlines small text untracked files; larger, binary, or unreadable untracked files are replaced with a note
 - These examples assume the plugin has been installed to ~/plugins/claude-bridge.
 - In `~/.agents/plugins/marketplace.json`, `./plugins/claude-bridge` resolves to `~/plugins/claude-bridge`.
 

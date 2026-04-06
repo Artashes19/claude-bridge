@@ -43,6 +43,20 @@ function isBridgeArtifact(relativePath) {
   return normalizedPath === ".claude-bridge" || normalizedPath.startsWith(".claude-bridge/");
 }
 
+function filterWorkingTreeStatusText(statusText) {
+  return statusText
+    .split("\n")
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+
+      const pathPart = line.slice(3);
+      return !pathPart.includes(".claude-bridge/");
+    })
+    .join("\n");
+}
+
 function readUntrackedFileText(cwd, relativePath, readFile, remainingBudgetBytes) {
   const filePath = path.join(cwd, relativePath);
 
@@ -133,7 +147,7 @@ export function buildReviewInput({ cwd, baseRef = null, run = spawnSync, readFil
     };
   }
 
-  const statusText = runGit(cwd, ["status", "--short"], run);
+  const statusText = filterWorkingTreeStatusText(runGit(cwd, ["status", "--short"], run));
   const diffStatText = runGit(cwd, ["diff", "--stat", "--no-ext-diff"], run);
   const unstagedDiffText = runGit(cwd, ["diff", "--no-ext-diff"], run);
   const stagedDiffText = runGit(cwd, ["diff", "--cached", "--no-ext-diff"], run);
