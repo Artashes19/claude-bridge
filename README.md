@@ -1,98 +1,124 @@
 # Claude Bridge
 
-Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI for:
+Claude Bridge is a Codex plugin that lets Codex call the local Claude Code CLI through an MCP server running on the host machine.
+
+It supports:
 
 - read-only code review
 - writable task delegation
-- background job control with status, result, and cancel
+- background jobs with status, result, and cancel
+- per-call model selection for `opus`, `sonnet`, `haiku`, or a full Claude model ID
 
 ## Requirements
 
 - Codex installed locally
 - Claude Code installed locally
 - `claude` available on `PATH`
-- Claude Code authenticated so it can run a prompt; `setup` probes the current repo's read-only review defaults in the requested `--cwd` and reports `READY: no` until that review configuration can run
-- `setup --cwd` must point at a Git repo when you want to validate the review flow for that repo
+- Claude Code authenticated on the host machine
 - Node.js 18+ available on `PATH`
-- Repo-local state is bootstrapped into the target repo's local Git exclude file so `.claude-bridge/` stays untracked by default
-- Read-only review input excludes repo-local `.claude-bridge/` artifacts from the working-tree status text and only inlines small text untracked files; large, binary, or unreadable untracked files are skipped with an explicit note
 
-## Repository Layout
+## Install
 
-- repo-local plugin source: `plugins/claude-bridge`
-- repo-local marketplace metadata: `.agents/plugins/marketplace.json`
-- runtime state inside each target repo: `.claude-bridge/`
-
-## Installing Into Your Home Codex Setup
-
-1. Clone this repository somewhere local:
+1. Clone the repository:
 
    ```bash
-   git clone https://github.com/Artashes19/claude-bridge.git
-   ```
-
-2. Change into the cloned repository:
-
-   ```bash
+   git clone git@github.com:Artashes19/claude-bridge.git
    cd claude-bridge
    ```
 
-3. Copy the plugin payload into your home plugin directory:
+2. Install the plugin into your local Codex plugins directory:
 
    ```bash
    mkdir -p ~/plugins
    rsync -a ./plugins/claude-bridge/ ~/plugins/claude-bridge/
    ```
 
-4. Add the marketplace entry from `.agents/plugins/marketplace.json` into `~/.agents/plugins/marketplace.json`.
-   If the file does not exist yet, create it with the `claude-bridge` entry and `./plugins/claude-bridge` source path.
-   In `~/.agents/plugins/marketplace.json`, `"./plugins/claude-bridge" resolves to ~/plugins/claude-bridge`.
+3. Register the plugin in `~/.agents/plugins/marketplace.json`:
 
-5. Restart Codex and verify the plugin with:
-
-   ```bash
-   node ~/plugins/claude-bridge/scripts/claude-bridge.mjs setup --cwd "$PWD"
+   ```json
+   {
+     "name": "claude-bridge-local",
+     "interface": {
+       "displayName": "Claude Bridge Local"
+     },
+     "plugins": [
+       {
+         "name": "claude-bridge",
+         "source": {
+           "source": "local",
+           "path": "./plugins/claude-bridge"
+         },
+         "policy": {
+           "installation": "AVAILABLE",
+           "authentication": "ON_INSTALL"
+         },
+         "category": "Coding"
+       }
+     ]
+   }
    ```
 
-   `READY: yes` means the local Claude CLI is installed, reports its version, and can execute a prompt using the current repo's read-only review defaults in `--cwd` (including the resolved model and default effort). If `--cwd` is not inside a Git repo, or if you see `READY: no` with `Not logged in · Please run /login`, fix that repo/auth state and rerun the command there.
+   In ~/.agents/plugins/marketplace.json, "./plugins/claude-bridge" resolves to ~/plugins/claude-bridge.
 
-## Sharing The Repo
+4. Register the MCP server. Use one of these:
 
-This repository is ready to publish on GitHub as-is. Once it is pushed, friends can clone it with:
+   Option A: `~/.codex/config.toml`
+
+   ```toml
+   [mcp_servers.claude-bridge]
+   command = "node"
+   args = ["~/plugins/claude-bridge/scripts/mcp-server.mjs"]
+   ```
+
+   Option B: Codex CLI
+
+   ```bash
+   codex mcp add claude-bridge -- node ~/plugins/claude-bridge/scripts/mcp-server.mjs
+   ```
+
+5. Restart Codex.
+
+## Verify
+
+Open Codex inside a Git repository and use the `claude-setup` skill.
+
+Expected result:
+
+- `ready: true`
+- Claude version is reported
+- the state directory points at that repository's `.claude-bridge/`
+
+If you want to verify the host bridge directly outside Codex, run:
 
 ```bash
-git clone https://github.com/Artashes19/claude-bridge.git
+node ~/plugins/claude-bridge/scripts/claude-bridge.mjs setup --cwd "$PWD"
 ```
 
-Then they can follow the install steps above to copy `plugins/claude-bridge/` into their own `~/plugins/claude-bridge/` directory and add the matching marketplace entry from `.agents/plugins/marketplace.json`.
+## Usage
 
-## MCP Server Setup (Recommended)
+Once installed, the plugin provides these skills:
 
-The MCP server runs on the host (outside Codex's sandbox) and gives Claude Bridge
-full access to the macOS keychain for Claude CLI authentication.
+- `claude-setup` — verify the bridge can talk to Claude in the current Git repo
+- `claude-review` — run a read-only Claude review
+- `claude-delegate` — let Claude edit the current working tree
+- `claude-status` — list bridge jobs for the repo
+- `claude-result` — show stored output for a job
+- `claude-cancel` — cancel a queued or running job
 
-### Option A: Codex config.toml
+Example workflows:
 
-Add to `~/.codex/config.toml`:
+- Review the current changes with Opus
+- Delegate a bugfix to Sonnet
+- Start a background review, then inspect it with `claude-status` and `claude-result`
 
-```toml
-[mcp_servers.claude-bridge]
-command = "node"
-args = ["~/plugins/claude-bridge/scripts/mcp-server.mjs"]
-```
+## Configuration
 
-### Option B: Codex CLI
+Claude Bridge loads configuration from:
 
-```bash
-codex mcp add claude-bridge -- node ~/plugins/claude-bridge/scripts/mcp-server.mjs
-```
+- repo-local: `.claude-bridge/config.json`
+- global: `~/.claude-bridge/config.json`
 
-After adding, restart Codex. The 6 bridge tools (`bridge_setup`, `bridge_review`,
-`bridge_delegate`, `bridge_status`, `bridge_result`, `bridge_cancel`) will be
-available as MCP tools.
-## Config
-
-Repo-local config:
+Example:
 
 ```json
 {
@@ -109,7 +135,26 @@ Repo-local config:
   },
   "runtime": {
     "defaultEffort": "high",
+    "defaultBackground": false,
     "claudeBinary": "claude"
   }
 }
 ```
+
+## Runtime Behavior
+
+- Repo state is stored inside `.claude-bridge/` in the target repository.
+- Claude Bridge adds `.claude-bridge/` to the repo's local Git exclude file so it stays untracked by default.
+- Review input filters out bridge-local artifacts and only inlines small text untracked files.
+- Large, binary, or unreadable untracked files are skipped with an explicit note.
+
+## Troubleshooting
+
+- `ready: false` with `Not logged in · Please run /login`
+  Run Claude Code directly on the host and complete login first.
+
+- `ready: false` with a timeout
+  Claude started, but the readiness probe did not finish in time. Retry from a normal terminal first to separate host Claude issues from Codex integration issues.
+
+- Codex keeps using old plugin behavior after an update
+  Re-copy `~/plugins/claude-bridge`, restart Codex, and verify the plugin version in `~/plugins/claude-bridge/.codex-plugin/plugin.json`.
