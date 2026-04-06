@@ -15,6 +15,19 @@ const DELEGATE_PROMPT_PATH = path.join(
   "delegate.md"
 );
 
+function selectFailureDiagnostics(result) {
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  return (
+    result.error?.message ??
+    result.error?.code ??
+    (typeof result.error === "string" ? result.error : "")
+  ).trim();
+}
+
 function resolveResumeContext({ jobsDir, jobIdOrLatest }) {
   if (!jobIdOrLatest) {
     return "No prior run context.";
@@ -147,7 +160,7 @@ export function runPreparedDelegateJob({
       status: result.exitCode === 0 ? "completed" : "failed",
       outputFile,
       pid: null,
-      stderrTail: (result.stderr ?? "").slice(-2000),
+      stderrTail: selectFailureDiagnostics(result).slice(-2000),
       finishedAt: new Date().toISOString()
     }
   });

@@ -87,6 +87,43 @@ test("review foreground rejects and prefers stderr diagnostics on Claude failure
   assert.equal(out.text(), "");
 });
 
+test("review foreground falls back to runner error diagnostics when stderr and stdout are empty", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-runner-error-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+
+  const out = createStdoutBuffer();
+
+  await assert.rejects(
+    () =>
+      main(["review", "--cwd", repoRoot, "look for missing auth"], {
+        homeDir: path.join(tempRoot, "home"),
+        stdio: out,
+        buildReviewInput: () => ({
+          target: "working tree",
+          statusText: "",
+          diffStatText: "",
+          diffText: ""
+        }),
+        runClaudeForeground: () => ({
+          exitCode: 1,
+          stdout: "",
+          stderr: "",
+          error: { code: "ENOENT", message: "spawn claude ENOENT" }
+        })
+      }),
+    /spawn claude ENOENT/
+  );
+
+  const jobsDir = path.join(repoRoot, ".claude-bridge", "jobs");
+  const [jobFile] = fs.readdirSync(jobsDir);
+  const job = readJobRecord({ jobsDir, jobId: jobFile.replace(/\.json$/, "") });
+
+  assert.equal(job.status, "failed");
+  assert.match(job.stderrTail, /spawn claude ENOENT/);
+  assert.equal(out.text(), "");
+});
+
 test("review background enqueues a worker job", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-bg-"));
   const repoRoot = path.join(tempRoot, "repo");

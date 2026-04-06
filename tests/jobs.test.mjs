@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -117,6 +118,33 @@ test("ensureStateDirs creates jobs and output directories", () => {
 
   assert.equal(fs.existsSync(paths.jobsDir), true);
   assert.equal(fs.existsSync(paths.outputDir), true);
+});
+
+test("ensureStateDirs bootstraps a local git exclude entry for repo state", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-exclude-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+
+  const initResult = spawnSync("git", ["init", "-q"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(initResult.status, 0);
+
+  const paths = resolvePaths({ cwd: repoRoot, homeDir: path.join(tempRoot, "home") });
+  ensureStateDirs(paths);
+  ensureStateDirs(paths);
+
+  const excludePathResult = spawnSync("git", ["rev-parse", "--git-path", "info/exclude"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.equal(excludePathResult.status, 0);
+
+  const excludePath = path.resolve(repoRoot, excludePathResult.stdout.trim());
+  const excludeText = fs.readFileSync(excludePath, "utf8");
+  const entries = excludeText
+    .split(/\r?\n/)
+    .filter((line) => line === ".claude-bridge/");
+
+  assert.equal(entries.length, 1);
 });
 
 test("updateJobRecord preserves identity fields and keeps a single stored record", () => {

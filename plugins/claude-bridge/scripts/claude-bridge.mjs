@@ -116,6 +116,15 @@ function formatClaudeFailure(result) {
     return stdout;
   }
 
+  const errorMessage = (
+    result.error?.message ??
+    result.error?.code ??
+    (typeof result.error === "string" ? result.error : "")
+  ).trim();
+  if (errorMessage) {
+    return errorMessage;
+  }
+
   return `Claude command failed with exit code ${result.exitCode ?? "unknown"}`;
 }
 

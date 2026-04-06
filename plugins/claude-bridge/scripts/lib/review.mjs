@@ -16,6 +16,19 @@ const REVIEW_PROMPT_PATH = path.join(
   "review.md"
 );
 
+function selectFailureDiagnostics(result) {
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  return (
+    result.error?.message ??
+    result.error?.code ??
+    (typeof result.error === "string" ? result.error : "")
+  ).trim();
+}
+
 export function prepareReviewJob({
   cwd,
   paths,
@@ -81,7 +94,7 @@ export function runPreparedReviewJob({
       status: result.exitCode === 0 ? "completed" : "failed",
       outputFile,
       pid: null,
-      stderrTail: result.stderr.slice(-2000),
+      stderrTail: selectFailureDiagnostics(result).slice(-2000),
       finishedAt: new Date().toISOString()
     }
   });
