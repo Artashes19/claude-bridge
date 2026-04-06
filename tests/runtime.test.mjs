@@ -171,6 +171,106 @@ test("buildReviewInput appends untracked file contents in a dedicated section", 
   assert.match(result.diffText, /brand new reviewable content/);
 });
 
+test("buildReviewInput omits bridge-local untracked artifacts from the review prompt", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-input-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(path.join(repoRoot, ".claude-bridge", "jobs"), { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, ".claude-bridge", "jobs", "latest.json"), "{\"id\":\"latest\"}\n");
+  fs.writeFileSync(path.join(repoRoot, "notes.txt"), "safe text\n");
+
+  const run = (_binary, args) => {
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "?? .claude-bridge/jobs/latest.json\n?? notes.txt\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: ".claude-bridge/jobs/latest.json\0notes.txt\0", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: repoRoot, run });
+
+  assert.match(result.diffText, /## Untracked/);
+  assert.doesNotMatch(result.diffText, /\.claude-bridge\/jobs\/latest\.json/);
+  assert.match(result.diffText, /notes\.txt/);
+  assert.match(result.diffText, /safe text/);
+});
+
+test("buildReviewInput skips large untracked files with an explicit note", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-input-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, "generated.log"), `${"x".repeat(32 * 1024)}TAIL`);
+
+  const run = (_binary, args) => {
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "?? generated.log\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: "generated.log\0", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: repoRoot, run });
+
+  assert.match(result.diffText, /## Untracked/);
+  assert.match(result.diffText, /generated\.log/);
+  assert.match(result.diffText, /(skipped|truncated)/i);
+  assert.doesNotMatch(result.diffText, /TAIL/);
+});
+
+test("buildReviewInput skips binary untracked files with an explicit note", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-review-input-"));
+  const repoRoot = path.join(tempRoot, "repo");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, "image.bin"), Buffer.from([0x00, 0xff, 0x00, 0xff, 0x00, 0x10]));
+
+  const run = (_binary, args) => {
+    if (args.join(" ") === "status --short") {
+      return { status: 0, stdout: "?? image.bin\n", stderr: "" };
+    }
+    if (args.join(" ") === "diff --stat --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "diff --cached --no-ext-diff") {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args.join(" ") === "ls-files --others --exclude-standard -z") {
+      return { status: 0, stdout: "image.bin\0", stderr: "" };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = buildReviewInput({ cwd: repoRoot, run });
+
+  assert.match(result.diffText, /## Untracked/);
+  assert.match(result.diffText, /image\.bin/);
+  assert.match(result.diffText, /(skipped|binary|unreadable)/i);
+  assert.doesNotMatch(result.diffText, /\x00/);
+});
+
 test("buildReviewInput keeps base-ref reviews scoped to the range even when the tree is dirty", () => {
   const seen = [];
   const run = (_binary, args) => {

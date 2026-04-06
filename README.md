@@ -13,6 +13,7 @@ Claude Bridge is a Codex plugin that lets Codex invoke the local Claude Code CLI
 - `claude` available on `PATH`
 - Claude Code authenticated so it can run a prompt; `setup` probes the current repo's read-only review defaults in the requested `--cwd` and reports `READY: no` until that review configuration can run
 - Node.js 18+ available on `PATH`
+- Read-only review input excludes repo-local `.claude-bridge/` artifacts and only inlines small text untracked files; large, binary, or unreadable untracked files are skipped with an explicit note
 
 ## Repository Layout
 
