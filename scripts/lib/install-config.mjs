@@ -29,6 +29,52 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function createManagedBlockPattern() {
+  return new RegExp(
+    `${escapeRegex(MANAGED_BEGIN)}[\\s\\S]*?${escapeRegex(MANAGED_END)}\\n?`,
+    "gm"
+  );
+}
+
+function countOccurrences(text, value) {
+  return (text.match(new RegExp(escapeRegex(value), "g")) ?? []).length;
+}
+
+function splitConfigSegments(configText) {
+  return configText
+    .split(/\n{2,}/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function isClaudeBridgeSkillSegment(segment) {
+  if (!segment.startsWith("[[skills.config]]")) {
+    return false;
+  }
+
+  return SKILL_NAMES.some((skillName) =>
+    new RegExp(`^path = ".+[\\/]${escapeRegex(skillName)}"$`, "m").test(segment)
+  );
+}
+
+function isLegacyClaudeBridgeSegment(segment) {
+  return (
+    /^\[mcp_servers\.claude-bridge\]$/m.test(segment) ||
+    /^\[mcp_servers\.claude-bridge\.tools\./m.test(segment) ||
+    isClaudeBridgeSkillSegment(segment)
+  );
+}
+
+function stripManagedConfigBlock(configText) {
+  return configText.replace(createManagedBlockPattern(), "").trim();
+}
+
+function stripLegacyClaudeBridgeSegments(configText) {
+  return splitConfigSegments(configText)
+    .filter((segment) => !isLegacyClaudeBridgeSegment(segment))
+    .join("\n\n");
+}
+
 export function resolveCodexConfigPath({ homeDir = os.homedir() } = {}) {
   return path.join(homeDir, ".codex", "config.toml");
 }
@@ -76,36 +122,53 @@ export function renderManagedConfigBlock({ runtimeHome }) {
 
 export function upsertManagedConfigBlock({ configText, runtimeHome }) {
   const block = renderManagedConfigBlock({ runtimeHome });
-  const pattern = new RegExp(
-    `${escapeRegex(MANAGED_BEGIN)}[\\s\\S]*?${escapeRegex(MANAGED_END)}\\n?`,
-    "m"
-  );
+  const withoutManagedBlock = stripManagedConfigBlock(configText);
+  const withoutLegacyConfig = stripLegacyClaudeBridgeSegments(withoutManagedBlock).trim();
 
-  if (pattern.test(configText)) {
-    return configText.replace(pattern, `${block}\n`);
-  }
-
-  const trimmed = configText.trimEnd();
-  if (!trimmed) {
+  if (!withoutLegacyConfig) {
     return `${block}\n`;
   }
 
-  return `${trimmed}\n\n${block}\n`;
+  return `${withoutLegacyConfig}\n\n${block}\n`;
 }
 
 export function hasManagedConfigTargets({ configText, runtimeHome }) {
+  const block = renderManagedConfigBlock({ runtimeHome });
+  const matches = configText.match(createManagedBlockPattern()) ?? [];
   const { mcpScript, skillPaths } = getManagedPaths({ runtimeHome });
 
-  if (!configText.includes("[mcp_servers.claude-bridge]")) {
+  if (matches.length !== 1) {
     return false;
   }
 
-  if (!configText.includes(`args = [${tomlString(mcpScript)}]`)) {
+  if (matches[0].trimEnd() !== block) {
     return false;
   }
 
-  return skillPaths.every((skillPath) =>
-    configText.includes(`path = ${tomlString(skillPath)}`)
+  if (countOccurrences(configText, MANAGED_BEGIN) !== 1) {
+    return false;
+  }
+
+  if (countOccurrences(configText, MANAGED_END) !== 1) {
+    return false;
+  }
+
+  if (countOccurrences(configText, "[mcp_servers.claude-bridge]") !== 1) {
+    return false;
+  }
+
+  if (countOccurrences(configText, `args = [${tomlString(mcpScript)}]`) !== 1) {
+    return false;
+  }
+
+  for (const toolName of READ_ONLY_TOOL_APPROVALS) {
+    if (countOccurrences(configText, `[mcp_servers.claude-bridge.tools.${toolName}]`) !== 1) {
+      return false;
+    }
+  }
+
+  return skillPaths.every(
+    (skillPath) => countOccurrences(configText, `path = ${tomlString(skillPath)}`) === 1
   );
 }
 

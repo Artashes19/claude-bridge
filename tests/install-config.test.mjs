@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   MANAGED_BEGIN,
-  MANAGED_END,
+  READ_ONLY_TOOL_APPROVALS,
   SKILL_NAMES,
   getManagedPaths,
   hasManagedConfigTargets,
@@ -13,17 +13,26 @@ import {
 
 const runtimeHome = "/home/test/.local/share/claude-bridge";
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 test("renderManagedConfigBlock includes runtime-owned MCP and all skill paths", () => {
   const block = renderManagedConfigBlock({ runtimeHome });
-  const { mcpScript, skillPaths } = getManagedPaths({ runtimeHome });
+  const paths = getManagedPaths({ runtimeHome });
 
   assert.match(block, /\[mcp_servers\.claude-bridge\]/);
   assert.match(block, /tool_timeout_sec = 1800/);
-  assert.match(block, new RegExp(mcpScript.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(block, new RegExp(escapeRegex(paths.mcpScript)));
   assert.equal(SKILL_NAMES.length, 6);
 
-  for (const skillPath of skillPaths) {
-    assert.match(block, new RegExp(skillPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const toolName of READ_ONLY_TOOL_APPROVALS) {
+    assert.match(block, new RegExp(escapeRegex("[mcp_servers.claude-bridge.tools." + toolName + "]")));
+    assert.match(block, /approval_mode = "approve"/);
+  }
+
+  for (const skillPath of paths.skillPaths) {
+    assert.match(block, new RegExp(escapeRegex(skillPath)));
   }
 });
 
@@ -37,6 +46,35 @@ test("upsertManagedConfigBlock appends the managed block when config is missing 
   assert.equal(updated, 'model = "gpt-5.4"\n\n' + expectedBlock + '\n');
 });
 
+test("upsertManagedConfigBlock normalizes legacy unmanaged Claude Bridge config into one managed block", () => {
+  const paths = getManagedPaths({ runtimeHome });
+  const legacyConfig = [
+    'model = "gpt-5.4"',
+    '',
+    '[mcp_servers.claude-bridge]',
+    'command = "node"',
+    'args = ["' + paths.mcpScript + '"]',
+    'startup_timeout_sec = 20',
+    'tool_timeout_sec = 60',
+    '',
+    '[[skills.config]]',
+    'path = "' + paths.skillPaths[0] + '"',
+    'enabled = true',
+    '',
+    '[[skills.config]]',
+    'path = "' + paths.skillPaths[1] + '"',
+    'enabled = true',
+    ''
+  ].join("\n");
+
+  const updated = upsertManagedConfigBlock({ configText: legacyConfig, runtimeHome });
+  const expectedBlock = renderManagedConfigBlock({ runtimeHome });
+
+  assert.equal(updated, 'model = "gpt-5.4"\n\n' + expectedBlock + '\n');
+  assert.equal(updated.split('[mcp_servers.claude-bridge]').length - 1, 1);
+  assert.equal(updated.split('[[skills.config]]').length - 1, SKILL_NAMES.length);
+});
+
 test("upsertManagedConfigBlock replaces the existing managed block without duplication", () => {
   const once = upsertManagedConfigBlock({ configText: "", runtimeHome });
   const twice = upsertManagedConfigBlock({
@@ -48,21 +86,42 @@ test("upsertManagedConfigBlock replaces the existing managed block without dupli
   assert.match(twice, /tool_timeout_sec = 1800/);
 });
 
-test("hasManagedConfigTargets validates MCP script and all skill paths from shared metadata", () => {
+test("hasManagedConfigTargets validates the full managed contract", () => {
   const block = renderManagedConfigBlock({ runtimeHome });
-  const { mcpScript } = getManagedPaths({ runtimeHome });
 
   assert.equal(hasManagedConfigTargets({ configText: block, runtimeHome }), true);
   assert.equal(
     hasManagedConfigTargets({
-      configText: block.replace(mcpScript, mcpScript + ".missing"),
+      configText: block.replace("tool_timeout_sec = 1800", "tool_timeout_sec = 60"),
       runtimeHome
     }),
     false
   );
   assert.equal(
     hasManagedConfigTargets({
-      configText: block.replace("claude-cancel", "claude-cancel-missing"),
+      configText: block.replace(
+        '[mcp_servers.claude-bridge.tools.bridge_review]\napproval_mode = "approve"\n\n',
+        ""
+      ),
+      runtimeHome
+    }),
+    false
+  );
+});
+
+test("hasManagedConfigTargets fails when managed skill path entries are duplicated", () => {
+  const block = renderManagedConfigBlock({ runtimeHome });
+  const paths = getManagedPaths({ runtimeHome });
+  const duplicatedSkill = [
+    '[[skills.config]]',
+    'path = "' + paths.skillPaths[0] + '"',
+    'enabled = true',
+    ''
+  ].join("\n");
+
+  assert.equal(
+    hasManagedConfigTargets({
+      configText: block + duplicatedSkill,
       runtimeHome
     }),
     false
