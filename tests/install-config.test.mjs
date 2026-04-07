@@ -36,6 +36,7 @@ test("upsertManagedConfigBlock appends the managed block when config is missing 
   assert.match(updated, new RegExp(MANAGED_BEGIN));
   assert.match(updated, new RegExp(MANAGED_END));
   assert.match(updated, /model = "gpt-5\.4"/);
+  assert.ok(updated.indexOf('model = "gpt-5.4"') < updated.indexOf(MANAGED_BEGIN));
 });
 
 test("upsertManagedConfigBlock replaces the existing managed block without duplication", () => {
@@ -51,8 +52,16 @@ test("upsertManagedConfigBlock replaces the existing managed block without dupli
 
 test("hasManagedConfigTargets validates MCP script and all skill paths from shared metadata", () => {
   const block = renderManagedConfigBlock({ runtimeHome });
+  const { mcpScript } = getManagedPaths({ runtimeHome });
 
   assert.equal(hasManagedConfigTargets({ configText: block, runtimeHome }), true);
+  assert.equal(
+    hasManagedConfigTargets({
+      configText: block.replace(mcpScript, `${mcpScript}-missing`),
+      runtimeHome
+    }),
+    false
+  );
   assert.equal(
     hasManagedConfigTargets({
       configText: block.replace("claude-cancel", "claude-cancel-missing"),
