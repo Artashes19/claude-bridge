@@ -47,22 +47,21 @@ test("upsertManagedConfigBlock appends the managed block when config is missing 
 });
 
 test("upsertManagedConfigBlock normalizes legacy unmanaged Claude Bridge config into one managed block", () => {
-  const paths = getManagedPaths({ runtimeHome });
   const legacyConfig = [
     'model = "gpt-5.4"',
     '',
     '[mcp_servers.claude-bridge]',
     'command = "node"',
-    'args = ["' + paths.mcpScript + '"]',
+    'args = ["~/plugins/claude-bridge/scripts/mcp-server.mjs"]',
     'startup_timeout_sec = 20',
     'tool_timeout_sec = 60',
     '',
     '[[skills.config]]',
-    'path = "' + paths.skillPaths[0] + '"',
+    'path = "~/plugins/claude-bridge/skills/claude-setup"',
     'enabled = true',
     '',
     '[[skills.config]]',
-    'path = "' + paths.skillPaths[1] + '"',
+    'path = "~/plugins/claude-bridge/skills/claude-review"',
     'enabled = true',
     ''
   ].join("\n");
@@ -88,8 +87,23 @@ test("upsertManagedConfigBlock replaces the existing managed block without dupli
 
 test("hasManagedConfigTargets validates the full managed contract", () => {
   const block = renderManagedConfigBlock({ runtimeHome });
+  const paths = getManagedPaths({ runtimeHome });
 
   assert.equal(hasManagedConfigTargets({ configText: block, runtimeHome }), true);
+  assert.equal(
+    hasManagedConfigTargets({
+      configText: block.replace(paths.mcpScript, paths.mcpScript + ".missing"),
+      runtimeHome
+    }),
+    false
+  );
+  assert.equal(
+    hasManagedConfigTargets({
+      configText: block.replace(paths.skillPaths[0], paths.skillPaths[0] + ".missing"),
+      runtimeHome
+    }),
+    false
+  );
   assert.equal(
     hasManagedConfigTargets({
       configText: block.replace("tool_timeout_sec = 1800", "tool_timeout_sec = 60"),
