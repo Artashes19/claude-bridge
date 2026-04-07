@@ -40,39 +40,100 @@ function countOccurrences(text, value) {
   return (text.match(new RegExp(escapeRegex(value), "g")) ?? []).length;
 }
 
-function splitConfigSegments(configText) {
-  return configText
-    .split(/\n{2,}/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+function isTomlTableHeader(line) {
+  const trimmed = line.trim();
+  return /^\[\[[^\]]+\]\]$/.test(trimmed) || /^\[[^\]]+\]$/.test(trimmed);
 }
 
-function isClaudeBridgeSkillSegment(segment) {
-  if (!segment.startsWith("[[skills.config]]")) {
-    return false;
+function parseConfigSections(configText) {
+  const prelude = [];
+  const sections = [];
+  let current = null;
+
+  for (const line of configText.split("\n")) {
+    if (isTomlTableHeader(line)) {
+      if (current) {
+        sections.push(current);
+      }
+      current = { header: line.trim(), lines: [line] };
+      continue;
+    }
+
+    if (current) {
+      current.lines.push(line);
+      continue;
+    }
+
+    prelude.push(line);
   }
 
-  return SKILL_NAMES.some((skillName) =>
-    new RegExp(`^path = ".+[\\/]${escapeRegex(skillName)}"$`, "m").test(segment)
+  if (current) {
+    sections.push(current);
+  }
+
+  return { prelude, sections };
+}
+
+function renderConfigSections({ prelude, sections }) {
+  const blocks = [];
+  const preludeText = prelude.join("\n").trim();
+
+  if (preludeText) {
+    blocks.push(preludeText);
+  }
+
+  for (const section of sections) {
+    const text = section.lines.join("\n").trimEnd();
+    if (text) {
+      blocks.push(text);
+    }
+  }
+
+  return blocks.join("\n\n");
+}
+
+function parseSkillPath(section) {
+  if (section.header !== "[[skills.config]]") {
+    return "";
+  }
+
+  const pathLine = section.lines.find((line) => line.trim().startsWith("path = "));
+  const match = pathLine?.match(/^\s*path\s*=\s*"([^"]+)"\s*$/);
+
+  return match?.[1] ?? "";
+}
+
+function isClaudeBridgeSkillPath(skillPath) {
+  return SKILL_NAMES.some(
+    (skillName) =>
+      skillPath.includes(`/claude-bridge/skills/${skillName}`) ||
+      skillPath.includes(`\\claude-bridge\\skills\\${skillName}`)
   );
 }
 
-function isLegacyClaudeBridgeSegment(segment) {
-  return (
-    /^\[mcp_servers\.claude-bridge\]$/m.test(segment) ||
-    /^\[mcp_servers\.claude-bridge\.tools\./m.test(segment) ||
-    isClaudeBridgeSkillSegment(segment)
-  );
+function isLegacyClaudeBridgeSection(section) {
+  if (section.header === "[mcp_servers.claude-bridge]") {
+    return true;
+  }
+
+  if (/^\[mcp_servers\.claude-bridge\.tools\.[^\]]+\]$/.test(section.header)) {
+    return true;
+  }
+
+  const skillPath = parseSkillPath(section);
+  return Boolean(skillPath) && isClaudeBridgeSkillPath(skillPath);
 }
 
 function stripManagedConfigBlock(configText) {
   return configText.replace(createManagedBlockPattern(), "").trim();
 }
 
-function stripLegacyClaudeBridgeSegments(configText) {
-  return splitConfigSegments(configText)
-    .filter((segment) => !isLegacyClaudeBridgeSegment(segment))
-    .join("\n\n");
+function stripLegacyClaudeBridgeConfig(configText) {
+  const { prelude, sections } = parseConfigSections(configText);
+  return renderConfigSections({
+    prelude,
+    sections: sections.filter((section) => !isLegacyClaudeBridgeSection(section))
+  });
 }
 
 export function resolveCodexConfigPath({ homeDir = os.homedir() } = {}) {
@@ -123,7 +184,7 @@ export function renderManagedConfigBlock({ runtimeHome }) {
 export function upsertManagedConfigBlock({ configText, runtimeHome }) {
   const block = renderManagedConfigBlock({ runtimeHome });
   const withoutManagedBlock = stripManagedConfigBlock(configText);
-  const withoutLegacyConfig = stripLegacyClaudeBridgeSegments(withoutManagedBlock).trim();
+  const withoutLegacyConfig = stripLegacyClaudeBridgeConfig(withoutManagedBlock).trim();
 
   if (!withoutLegacyConfig) {
     return `${block}\n`;

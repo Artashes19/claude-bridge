@@ -46,32 +46,35 @@ test("upsertManagedConfigBlock appends the managed block when config is missing 
   assert.equal(updated, 'model = "gpt-5.4"\n\n' + expectedBlock + '\n');
 });
 
-test("upsertManagedConfigBlock normalizes legacy unmanaged Claude Bridge config into one managed block", () => {
+test("upsertManagedConfigBlock normalizes legacy unmanaged Claude Bridge config while preserving adjacent unrelated settings", () => {
   const legacyConfig = [
     'model = "gpt-5.4"',
-    '',
     '[mcp_servers.claude-bridge]',
     'command = "node"',
     'args = ["~/plugins/claude-bridge/scripts/mcp-server.mjs"]',
     'startup_timeout_sec = 20',
     'tool_timeout_sec = 60',
-    '',
     '[[skills.config]]',
     'path = "~/plugins/claude-bridge/skills/claude-setup"',
     'enabled = true',
-    '',
     '[[skills.config]]',
     'path = "~/plugins/claude-bridge/skills/claude-review"',
     'enabled = true',
+    '[profiles.release]',
+    'doctor = true',
     ''
   ].join("\n");
 
   const updated = upsertManagedConfigBlock({ configText: legacyConfig, runtimeHome });
   const expectedBlock = renderManagedConfigBlock({ runtimeHome });
 
-  assert.equal(updated, 'model = "gpt-5.4"\n\n' + expectedBlock + '\n');
+  assert.equal(
+    updated,
+    'model = "gpt-5.4"\n\n[profiles.release]\ndoctor = true\n\n' + expectedBlock + '\n'
+  );
   assert.equal(updated.split('[mcp_servers.claude-bridge]').length - 1, 1);
   assert.equal(updated.split('[[skills.config]]').length - 1, SKILL_NAMES.length);
+  assert.match(updated, /\[profiles\.release\]\ndoctor = true/);
 });
 
 test("upsertManagedConfigBlock replaces the existing managed block without duplication", () => {
@@ -97,13 +100,17 @@ test("hasManagedConfigTargets validates the full managed contract", () => {
     }),
     false
   );
-  assert.equal(
-    hasManagedConfigTargets({
-      configText: block.replace(paths.skillPaths[0], paths.skillPaths[0] + ".missing"),
-      runtimeHome
-    }),
-    false
-  );
+
+  for (const skillPath of paths.skillPaths) {
+    assert.equal(
+      hasManagedConfigTargets({
+        configText: block.replace(skillPath, skillPath + ".missing"),
+        runtimeHome
+      }),
+      false
+    );
+  }
+
   assert.equal(
     hasManagedConfigTargets({
       configText: block.replace("tool_timeout_sec = 1800", "tool_timeout_sec = 60"),
