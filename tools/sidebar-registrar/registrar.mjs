@@ -184,12 +184,78 @@ const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 // Expand only the remote home prefix; keep the rest of the path literal.
 const remotePath = (value) => value.startsWith("~/") ? `"$HOME"/${shellQuote(value.slice(2))}` : shellQuote(value);
 
-export function fetchCatalog({ ssh, alias, bridgeScript, bridgeRoot }) {
-  const command = `node ${remotePath(bridgeScript)} sessions --all-repositories --cwd ${remotePath(bridgeRoot)}`;
-  const catalog = JSON.parse(runSsh({ ssh, alias, command }));
-  if (!Array.isArray(catalog.sessions)) throw new Error("Unexpected catalog output: no sessions array.");
-  return catalog;
+/**
+ * One remote shell call that lists every repository with bridge jobs:
+ * the bridge's own registry (`~/.claude-bridge/repositories/*.json`) plus a bounded
+ * `find` under each scan root (stdin lines: `root<TAB>depth`). The registry alone
+ * misses repos that ran jobs before the bridge started registering them.
+ */
+export const REPO_DISCOVERY = String.raw`
+home="$HOME"
+emit() { [ -d "$1/.claude-bridge/jobs" ] || return 0; rp=$(realpath -e -- "$1" 2>/dev/null || printf '%s' "$1"); echo "REPO	$rp"; }
+for f in "$home"/.claude-bridge/repositories/*.json; do
+  [ -f "$f" ] || continue
+  r=$(sed -n 's/.*"repoRoot" *: *"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+  [ -n "$r" ] && emit "$r"
+done
+while IFS="	" read -r root depth; do
+  [ -n "$root" ] || continue
+  case "$root" in "~") root="$home";; "~/"*) root="$home/$(printf '%s' "$root" | cut -c3-)";; esac
+  [ -d "$root" ] || continue
+  [ -n "$depth" ] || depth=4
+  find -L "$root" -maxdepth "$depth" \( -name node_modules -o -name .git -o -name .cache -o -name .nvm -o -name .claude \) -prune -o -type d -name .claude-bridge -print 2>/dev/null |
+  while IFS= read -r d; do emit "$(dirname -- "$d")"; done
+done`;
+
+export function parseRepoList(output) {
+  const repos = new Set();
+  for (const line of output.split("\n")) {
+    const [tag, repo] = line.split("\t");
+    if (tag === "REPO" && repo) repos.add(repo);
+  }
+  return [...repos];
 }
+
+export function discoverRepos({ ssh, alias, scanRoots }) {
+  const input = scanRoots.map(({ root, depth }) => `${root}\t${depth}`).join("\n") + "\n";
+  return parseRepoList(runSsh({ ssh, alias, command: `sh -c ${shellQuote(REPO_DISCOVERY)}`, input }));
+}
+
+const CATALOG_SEP = "@@CATALOG@@";
+
+/** Parse the concatenated per-repo catalog output; a repo whose output is not JSON yields a warning. */
+export function parseCatalogs(output) {
+  const sessions = [], warnings = [], seen = new Set(), repos = [];
+  for (const chunk of output.split(CATALOG_SEP).slice(1)) {
+    const newline = chunk.indexOf("\n");
+    const repo = chunk.slice(0, newline).trim(), body = chunk.slice(newline + 1).trim();
+    repos.push(repo);
+    let catalog;
+    try { catalog = JSON.parse(body); } catch { warnings.push(`Catalog unavailable for ${repo}: ${body.split("\n").at(-1)?.slice(0, 200) || "no output"}`); continue; }
+    if (!Array.isArray(catalog.sessions)) { warnings.push(`Catalog for ${repo} has no sessions array.`); continue; }
+    for (const session of catalog.sessions) {
+      if (seen.has(session.sessionId)) continue;
+      seen.add(session.sessionId);
+      sessions.push(session);
+    }
+    for (const warning of catalog.warnings ?? []) warnings.push(warning);
+  }
+  return { sessions, warnings: [...new Set(warnings)], repos };
+}
+
+/** One remote shell call: run the bridge catalog once per repository. */
+export function fetchCatalog({ ssh, alias, bridgeScript, repos }) {
+  const command = repos.map((repo) =>
+    `echo ${shellQuote(`${CATALOG_SEP} ${repo}`)}; node ${remotePath(bridgeScript)} sessions --cwd ${remotePath(repo)} 2>&1 || true`).join("; ");
+  return parseCatalogs(runSsh({ ssh, alias, command, timeoutMs: 30_000 + 15_000 * repos.length }));
+}
+
+export function parseScanRoot(value) {
+  const match = /^(.*?)(?::(\d+))?$/.exec(value);
+  return { root: match[1], depth: match[2] ? Number(match[2]) : 4 };
+}
+
+export const DEFAULT_SCAN_ROOTS = [{ root: "~", depth: 4 }, { root: "/tmp", depth: 2 }];
 
 /** One remote shell call: resolve $HOME, then stat each candidate transcript path. */
 export const TRANSCRIPT_PROBE = String.raw`
@@ -224,14 +290,17 @@ export function probeTranscripts({ ssh, alias, sessions }) {
 // ---------- CLI ----------
 
 export function parseArgs(argv) {
-  const options = { dryRun: false, json: false, includeTmp: false, only: [], ssh: "ssh",
-    bridgeRoot: "~/plugins/claude-bridge" };
+  const options = { dryRun: false, json: false, excludeTmp: false, only: [], ssh: "ssh",
+    bridgeRoot: "~/plugins/claude-bridge", scanRoots: [], noScan: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i], next = () => argv[++i];
     switch (arg) {
       case "--dry-run": options.dryRun = true; break;
       case "--json": options.json = true; break;
-      case "--include-tmp": options.includeTmp = true; break;
+      case "--exclude-tmp": options.excludeTmp = true; break;
+      case "--include-tmp": break; // now the default; accepted for old launchd plists
+      case "--scan-root": options.scanRoots.push(parseScanRoot(next())); break;
+      case "--no-scan": options.noScan = true; break;
       case "--only": options.only.push(next()); break;
       case "--ssh-alias": options.sshAlias = next(); break;
       case "--ssh-name": options.sshName = next(); break;
@@ -260,8 +329,11 @@ session store so they appear in the Code-tab sidebar after the next relaunch.
   --ssh-alias <alias>   ssh(1) host alias to connect with (default: the config name)
   --bridge-root <path>  Bridge checkout on the host (default: ~/plugins/claude-bridge)
   --bridge-script <p>   claude-bridge.mjs on the host (default: <root>/plugins/claude-bridge/scripts/claude-bridge.mjs)
+  --scan-root <p[:d]>   Find repos with .claude-bridge/jobs under this host path, d levels deep
+                        (repeatable; default: ~:4 and /tmp:2). The bridge's registry is always read too.
+  --no-scan             Use only the bridge's registry and --bridge-root
   --only <cwd>          Only register sessions whose cwd equals this (repeatable)
-  --include-tmp         Also register sessions whose cwd is under /tmp
+  --exclude-tmp         Skip sessions whose cwd is under /tmp (the bridge's test runs)
   --account/--org <id>  Desktop account / org (default: detected)
   --state <file>        Registrar state (default: ~/.claude-bridge/sidebar-registrar/state.json)
 `;
@@ -269,7 +341,7 @@ session store so they appear in the Code-tab sidebar after the next relaunch.
 export function selectSessions(catalog, options) {
   return catalog.sessions.filter((session) => {
     if (options.only.length > 0 && !options.only.includes(session.cwd)) return false;
-    if (!options.includeTmp && /^\/(?:private\/)?tmp\//.test(session.cwd ?? "")) return false;
+    if (options.excludeTmp && /^\/(?:private\/)?tmp\//.test(session.cwd ?? "")) return false;
     return true;
   });
 }
@@ -285,7 +357,9 @@ export async function main(argv = process.argv.slice(2), io = { log: console.log
   const bridgeScript = options.bridgeScript ?? `${bridgeRoot.replace(/\/+$/, "")}/plugins/claude-bridge/scripts/claude-bridge.mjs`;
   const statePath = options.statePath ?? path.join(os.homedir(), ".claude-bridge", "sidebar-registrar", "state.json");
 
-  const catalog = fetchCatalog({ ssh: options.ssh, alias, bridgeScript, bridgeRoot });
+  const scanRoots = options.noScan ? [] : options.scanRoots.length ? options.scanRoots : DEFAULT_SCAN_ROOTS;
+  const repos = [...new Set([bridgeRoot, ...discoverRepos({ ssh: options.ssh, alias, scanRoots })])];
+  const catalog = fetchCatalog({ ssh: options.ssh, alias, bridgeScript, repos });
   const candidates = selectSessions(catalog, options);
   const { found } = probeTranscripts({ ssh: options.ssh, alias, sessions: candidates });
   const sessions = candidates.map((session) => ({ ...session, transcript: found.get(session.sessionId) ?? null }));
@@ -307,13 +381,14 @@ export async function main(argv = process.argv.slice(2), io = { log: console.log
     }
   }
 
-  const report = { account, org, storeDir, sshHost: sshConfig.sshHost, dryRun: options.dryRun,
+  const report = { account, org, storeDir, sshHost: sshConfig.sshHost, dryRun: options.dryRun, repos,
     catalogSessions: catalog.sessions.length, considered: sessions.length, written,
     actions: actions.map(({ text, record, ...rest }) => ({ ...rest, ...(record ? { title: record.title, cwd: record.cwd } : {}) })),
     warnings: [...new Set(catalog.warnings ?? [])] };
   if (options.json) { io.log(JSON.stringify(report, null, 2)); return 0; }
   io.log(`Store: ${storeDir}`);
-  io.log(`Host:  ${sshConfig.sshHost} (ssh alias ${alias}); catalog has ${catalog.sessions.length} session(s), ${sessions.length} considered`);
+  io.log(`Host:  ${sshConfig.sshHost} (ssh alias ${alias}); ${repos.length} repo(s) with bridge jobs; catalog has ${catalog.sessions.length} session(s), ${sessions.length} considered`);
+  for (const repo of repos) io.log(`  repo   ${repo}`);
   for (const action of report.actions) {
     io.log(action.kind === "skip" ? `  skip   ${action.sessionId}  ${action.why}` :
       `  ${action.kind.padEnd(6)} ${action.sessionId}  ${action.title}  (${action.cwd})`);

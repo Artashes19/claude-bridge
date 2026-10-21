@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { slugForCwd, buildRecord, planActions, makeStore, hashText, parseProbe, parseArgs, selectSessions,
-  resolveStoreDir, resolveSshHost, sessionTitle, main, runSsh } from "./registrar.mjs";
+  resolveStoreDir, resolveSshHost, sessionTitle, main, runSsh, parseRepoList, parseCatalogs, parseScanRoot } from "./registrar.mjs";
 
 const SID = "b5e933d5-ff56-4dfb-9f93-7d2296c38ec8";
 const session = (over = {}) => ({ sessionId: SID, jobId: "request-1", cwd: "/home/u/repo", kind: "discuss",
@@ -114,8 +114,12 @@ test("parseArgs and selectSessions honour --only and the /tmp filter", () => {
   assert.equal(options.dryRun, true); assert.equal(options.sshName, "cluster");
   const catalog = { sessions: [session(), session({ cwd: "/tmp/bridge-x" }), session({ cwd: "/home/u/other" })] };
   assert.deepEqual(selectSessions(catalog, options).map((s) => s.cwd), ["/home/u/repo"]);
-  assert.deepEqual(selectSessions(catalog, parseArgs([])).map((s) => s.cwd), ["/home/u/repo", "/home/u/other"]);
-  assert.equal(selectSessions(catalog, parseArgs(["--include-tmp"])).length, 3);
+  assert.equal(selectSessions(catalog, parseArgs([])).length, 3, "/tmp sessions are included by default");
+  assert.deepEqual(selectSessions(catalog, parseArgs(["--exclude-tmp"])).map((s) => s.cwd), ["/home/u/repo", "/home/u/other"]);
+  assert.equal(parseArgs(["--include-tmp"]).excludeTmp, false, "old flag still accepted");
+  assert.deepEqual(parseArgs(["--scan-root", "/data/projects:2", "--scan-root", "~/src"]).scanRoots,
+    [{ root: "/data/projects", depth: 2 }, { root: "~/src", depth: 4 }]);
+  assert.equal(parseArgs(["--no-scan"]).noScan, true);
   assert.throws(() => parseArgs(["--bogus"]), /Unknown argument/);
 });
 
@@ -131,6 +135,22 @@ test("resolveStoreDir and resolveSshHost read the desktop app's own config files
   assert.throws(() => resolveSshHost({ userData, name: "nope" }), /No desktop SSH config/);
 });
 
+test("parseRepoList keeps only tagged, deduplicated repo lines", () => {
+  assert.deepEqual(parseRepoList("junk\nREPO\t/a\nREPO\t/b\nREPO\t/a\n\n"), ["/a", "/b"]);
+});
+
+test("parseCatalogs merges per-repo catalogs, dedupes sessions and reports broken repos", () => {
+  const good = JSON.stringify({ sessions: [session(), session({ sessionId: "11111111-2222-4333-8444-555555555555" })], warnings: ["w1"] });
+  const dupe = JSON.stringify({ sessions: [session()] });
+  const output = `@@CATALOG@@ /a\n${good}\n@@CATALOG@@ /b\n${dupe}\n@@CATALOG@@ /c\nError: not a git repository\n`;
+  const { sessions, warnings, repos } = parseCatalogs(output);
+  assert.deepEqual(repos, ["/a", "/b", "/c"]);
+  assert.equal(sessions.length, 2);
+  assert.ok(warnings.includes("w1"));
+  assert.ok(warnings.some((w) => w.startsWith("Catalog unavailable for /c: Error: not a git repository")));
+  assert.deepEqual(parseScanRoot("~/x:3"), { root: "~/x", depth: 3 });
+});
+
 function integrationFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-integration-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -139,7 +159,15 @@ function integrationFixture(t) {
   const script = path.join(checkout, "plugins/claude-bridge/scripts/claude-bridge.mjs");
   fs.mkdirSync(path.dirname(script), { recursive: true });
   const catalogSession = session({ cwd: checkout });
-  fs.writeFileSync(script, `console.log(${JSON.stringify(JSON.stringify({ sessions: [catalogSession] }))});\n`);
+  // The fake bridge answers only for the checkout; any other repo yields an empty catalog.
+  fs.writeFileSync(script, `const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+console.log(cwd === ${JSON.stringify(checkout)} ? ${JSON.stringify(JSON.stringify({ sessions: [catalogSession] }))} : '{"sessions":[]}');\n`);
+  // An unregistered repo with a jobs dir, found only by scanning the remote home.
+  const unregistered = path.join(remoteHome, "projects", "other repo");
+  fs.mkdirSync(path.join(unregistered, ".claude-bridge", "jobs"), { recursive: true });
+  // A registry entry pointing at a repo that no longer exists must be ignored.
+  fs.mkdirSync(path.join(remoteHome, ".claude-bridge", "repositories"), { recursive: true });
+  fs.writeFileSync(path.join(remoteHome, ".claude-bridge", "repositories", "gone.json"), JSON.stringify({ repoRoot: path.join(remoteHome, "gone") }));
   const transcript = path.join(remoteHome, ".claude/projects", slugForCwd(checkout), `${SID}.jsonl`);
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.writeFileSync(transcript, "{}\n");
@@ -164,15 +192,27 @@ process.exit(result.status ?? 1);
 `, { mode: 0o700 });
   const statePath = path.join(root, "state/state.json");
   const args = ["--user-data", userData, "--state", statePath, "--ssh-bin", ssh,
-    "--bridge-root", "~/checkout's directory", "--include-tmp", "--json"];
+    "--bridge-root", "~/checkout's directory", "--json"];
   const recordPath = path.join(storeDir, `local_${SID}.json`);
   const run = async (...extra) => {
     let report;
     await main([...args, ...extra], { log: (text) => { report = JSON.parse(text); }, error: () => {} });
     return report;
   };
-  return { run, recordPath, statePath, storeDir, transcript, sshConfig, root };
+  return { run, recordPath, statePath, storeDir, transcript, sshConfig, root, unregistered, remoteHome };
 }
+
+test("repo discovery finds unregistered repos with job dirs and ignores dead registry entries", async (t) => {
+  const fixture = integrationFixture(t);
+  const report = await fixture.run("--dry-run");
+  assert.ok(report.repos.includes("~/checkout's directory"), "bridge root is always queried");
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+  assert.ok(report.repos.some((r) => real(r) === real(fixture.unregistered)), `scan found ${report.repos}`);
+  assert.ok(!report.repos.some((r) => r.endsWith("/gone")), "dead registry entry dropped");
+  assert.equal(report.catalogSessions, 1);
+  const noScan = await fixture.run("--dry-run", "--no-scan");
+  assert.deepEqual(noScan.repos, ["~/checkout's directory"]);
+});
 
 test("pull-and-write flow expands remote home, probes real transcripts and preserves SSH settings", async (t) => {
   const fixture = integrationFixture(t);
