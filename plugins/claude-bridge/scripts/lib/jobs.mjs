@@ -49,6 +49,23 @@ export function writeJobRecord({ jobsDir, job }) {
   return job;
 }
 
+export function claimJobRecord({ jobsDir, job }) {
+  const destination = jobPath(jobsDir, job.id);
+  const temporary = `${destination}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(job, null, 2));
+    try {
+      fs.linkSync(temporary, destination);
+      return true;
+    } catch (error) {
+      if (error.code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
 export function readJobRecord({ jobsDir, jobId }) {
   return JSON.parse(fs.readFileSync(jobPath(jobsDir, jobId), "utf8"));
 }
@@ -68,7 +85,15 @@ export function listJobRecords({ jobsDir }) {
   return fs
     .readdirSync(jobsDir)
     .filter((entry) => entry.endsWith(".json"))
-    .map((entry) => JSON.parse(fs.readFileSync(path.join(jobsDir, entry), "utf8")))
+    .map((entry) => {
+      try {
+        const job = JSON.parse(fs.readFileSync(path.join(jobsDir, entry), "utf8"));
+        if (!job || typeof job.id !== "string" || typeof job.createdAt !== "string") throw new Error("Missing job identity or creation time");
+        return job;
+      } catch (error) {
+        return { id: entry.slice(0, -5), status: "failed", createdAt: "", metadataError: error.message };
+      }
+    })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 

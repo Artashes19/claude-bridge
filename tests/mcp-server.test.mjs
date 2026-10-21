@@ -38,7 +38,7 @@ function collectResponse(child, timeoutMs = 10000) {
   });
 }
 
-test("MCP server responds to initialize and lists 6 tools", async () => {
+test("MCP server responds to initialize and lists discussion and recovery tools", async () => {
   const child = spawn(process.execPath, [SCRIPT], {
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -80,7 +80,13 @@ test("MCP server responds to initialize and lists 6 tools", async () => {
     assert.ok(toolNames.includes("bridge_status"), "missing bridge_status");
     assert.ok(toolNames.includes("bridge_result"), "missing bridge_result");
     assert.ok(toolNames.includes("bridge_cancel"), "missing bridge_cancel");
-    assert.equal(toolNames.length, 6);
+    assert.ok(toolNames.includes("bridge_discuss"));
+    assert.ok(toolNames.includes("bridge_answer"));
+    assert.ok(toolNames.includes("bridge_steer"));
+    assert.ok(toolNames.includes("bridge_usage"));
+    assert.ok(toolNames.includes("bridge_sessions"));
+    assert.ok(toolNames.includes("bridge_share"));
+    assert.equal(toolNames.length, 12);
   } finally {
     child.kill();
   }

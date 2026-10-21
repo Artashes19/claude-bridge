@@ -59,7 +59,15 @@ function readJsonIfExists(filePath) {
 export function loadMergedConfig({ repoConfigPath, globalConfigPath }) {
   const globalConfig = readJsonIfExists(globalConfigPath);
   const repoConfig = readJsonIfExists(repoConfigPath);
-  return deepMerge(deepMerge(cloneValue(DEFAULT_CONFIG), globalConfig), repoConfig);
+  const config = deepMerge(deepMerge(cloneValue(DEFAULT_CONFIG), globalConfig), repoConfig);
+  config.sources = {};
+  for (const command of ["review", "delegate"]) {
+    config.sources[command] = repoConfig.models?.defaults?.[command] !== undefined ? "repository" :
+      globalConfig.models?.defaults?.[command] !== undefined ? "global" : "built-in";
+  }
+  config.sources.effort = repoConfig.runtime?.defaultEffort !== undefined ? "repository" :
+    globalConfig.runtime?.defaultEffort !== undefined ? "global" : "built-in";
+  return config;
 }
 
 export function resolveModel({ command, requestedModel, config }) {
@@ -71,7 +79,19 @@ export function resolveModel({ command, requestedModel, config }) {
 }
 
 export function resolveEffort({ requestedEffort, config }) {
-  return requestedEffort ?? config.runtime.defaultEffort;
+  const effort = requestedEffort ?? config.runtime.defaultEffort;
+  if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) {
+    throw new Error("Invalid effort. Supported levels: low, medium, high, xhigh, max.");
+  }
+  return effort;
+}
+
+export function resolveBudget(value, config) {
+  const budget = value ?? config.runtime.maxBudgetUsd ?? null;
+  if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)) {
+    throw new Error("maxBudgetUsd must be a positive number.");
+  }
+  return budget;
 }
 
 export function resolveClaudeBinary({ config, env = process.env }) {

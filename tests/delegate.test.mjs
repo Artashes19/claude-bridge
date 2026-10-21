@@ -111,7 +111,7 @@ test("delegate foreground falls back to runner error diagnostics when stderr and
   assert.equal(out.text(), "");
 });
 
-test("delegate --resume latest selects the newest completed output by finishedAt", async () => {
+test("delegate --resume latest selects the newest saved session by finishedAt", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-resume-"));
   const repoRoot = path.join(tempRoot, "repo");
   fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
@@ -129,6 +129,7 @@ test("delegate --resume latest selects the newest completed output by finishedAt
     path.join(repoRoot, ".claude-bridge", "jobs", `${olderByFinishedAt}.json`),
     JSON.stringify({
       id: olderByFinishedAt,
+      sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sessionReady: true,
       kind: "delegate",
       cwd: repoRoot,
       summary: "Older finished job",
@@ -148,6 +149,7 @@ test("delegate --resume latest selects the newest completed output by finishedAt
     path.join(repoRoot, ".claude-bridge", "jobs", `${newerByCreatedAt}.json`),
     JSON.stringify({
       id: newerByCreatedAt,
+      sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", sessionReady: true,
       kind: "delegate",
       cwd: repoRoot,
       summary: "Newer created job",
@@ -159,19 +161,20 @@ test("delegate --resume latest selects the newest completed output by finishedAt
     })
   );
 
-  let seenPrompt = "";
+  let seenArgs = [];
 
   await main(["delegate", "--cwd", repoRoot, "--resume", "latest", "finish the test coverage"], {
     homeDir: path.join(tempRoot, "home"),
     checkGitRepository: assumeGitRepository,
     runClaudeForeground: ({ args }) => {
-      seenPrompt = args.at(-1);
+      seenArgs = args;
       return { exitCode: 0, stdout: "Done.\n", stderr: "" };
     }
   });
 
-  assert.match(seenPrompt, /Selected output from the job that finished last\./);
-  assert.doesNotMatch(seenPrompt, /Stale output from the job that finished earlier\./);
+  assert.equal(seenArgs[seenArgs.indexOf("--resume") + 1], "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assert.equal(seenArgs.at(-1), "finish the test coverage");
+  assert.ok(!seenArgs.includes("--session-id"));
 });
 
 test("delegate --resume rejects missing or invalid explicit sources", async () => {

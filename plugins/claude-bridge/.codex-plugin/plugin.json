@@ -1,6 +1,6 @@
 {
   "name": "claude-bridge",
-  "version": "0.2.0",
+  "version": "0.6.0",
   "description": "Run local Claude Code review and delegation flows from Codex via MCP.",
   "author": {
     "name": "Artashes Mkrtchyan"
@@ -15,7 +15,10 @@
     "longDescription": "Read-only Claude reviews, writable Claude delegation, and lightweight local job tracking for Codex users. Uses an MCP stdio server for host-level Claude CLI access.",
     "developerName": "Artashes Mkrtchyan",
     "category": "Coding",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://github.com/Artashes19/claude-bridge",
     "privacyPolicyURL": "https://github.com/Artashes19/claude-bridge",
     "termsOfServiceURL": "https://github.com/Artashes19/claude-bridge",

@@ -9,13 +9,43 @@ import {
   buildReviewClaudeArgs,
   checkClaudeAvailability,
   checkClaudeReadiness,
-  runClaudeForeground
+  runClaudeForeground,
+  spawnDetachedWorker
 } from "../plugins/claude-bridge/scripts/lib/claude.mjs";
 import { buildReviewInput } from "../plugins/claude-bridge/scripts/lib/git.mjs";
 import {
   buildDelegatePrompt,
   buildReviewPrompt
 } from "../plugins/claude-bridge/scripts/lib/prompts.mjs";
+
+test("file-backed execution preserves output beyond the pipe buffer limit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-output-"));
+  try {
+    const outputFile = path.join(root, "output.txt");
+    const result = runClaudeForeground({
+      binary: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024)); process.stderr.write('y'.repeat(2 * 1024 * 1024));"],
+      cwd: root,
+      outputFile,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.error, undefined);
+    assert.equal(result.stdout.length, 2 * 1024 * 1024);
+    assert.equal(fs.statSync(`${outputFile}.stderr`).size, 2 * 1024 * 1024);
+    assert.equal(result.stderr.length, 2000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("detached launch rejects asynchronous executable errors", async () => {
+  await assert.rejects(spawnDetachedWorker({
+    nodeBinary: "/nonexistent/worker-runtime",
+    scriptPath: "/nonexistent/script.mjs",
+    workerArgs: [],
+    cwd: os.tmpdir(),
+  }), { code: "ENOENT" });
+});
 
 test("checkClaudeAvailability reports version when the binary works", () => {
   const result = checkClaudeAvailability({
@@ -68,7 +98,7 @@ test("runClaudeForeground passes timeout through to the runner and preserves run
   assert.equal(result.error?.code, "ETIMEDOUT");
 });
 
-test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in", () => {
+test("readiness checks authentication without a paid prompt", () => {
   const calls = [];
 
   const result = checkClaudeReadiness({
@@ -95,18 +125,7 @@ test("checkClaudeReadiness rejects a prompt probe when Claude is not logged in",
   assert.match(result.error, /Not logged in/);
   assert.deepEqual(calls[0].binary, "claude");
   assert.equal(calls[0].timeoutMs, 30000);
-  assert.deepEqual(calls[0].args.slice(0, 9), [
-    "-p",
-    "--model",
-    "claude-opus-4-6",
-    "--effort",
-    "high",
-    "--tools",
-    "",
-    "--permission-mode",
-    "plan"
-  ]);
-  assert.match(calls[0].args[9], /ready/i);
+  assert.deepEqual(calls[0].args, ["auth", "status", "--json"]);
 });
 
 test("buildReviewInput captures git status and both unstaged and staged diffs", () => {

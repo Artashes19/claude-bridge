@@ -1,4 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { runStream } from "./stream.mjs";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 30000;
 
@@ -50,16 +52,14 @@ export function checkClaudeReadiness({
 
   const probe = runForeground({
     binary,
-    args: buildReviewClaudeArgs({
-      model,
-      effort,
-      prompt: "Reply with exactly: ready."
-    }),
+    args: ["auth", "status", "--json"],
     cwd,
     timeoutMs
   });
 
-  if (probe.exitCode === 0) {
+  let authenticated = false;
+  try { authenticated = JSON.parse(probe.stdout).loggedIn === true; } catch {}
+  if (probe.exitCode === 0 && authenticated) {
     return {
       ready: true,
       version: availability.version,
@@ -74,11 +74,11 @@ export function checkClaudeReadiness({
   return {
     ready: false,
     version: availability.version,
-    error: `Claude prompt probe failed: ${probeError}`
+    error: `Authentication check failed: ${probeError}`
   };
 }
 
-export function buildReviewClaudeArgs({ model, effort, prompt }) {
+export function buildReviewClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd }) {
   return [
     "-p",
     "--model",
@@ -89,11 +89,12 @@ export function buildReviewClaudeArgs({ model, effort, prompt }) {
     "",
     "--permission-mode",
     "plan",
+    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }),
     prompt
   ];
 }
 
-export function buildDelegateClaudeArgs({ model, effort, prompt }) {
+export function buildDelegateClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd }) {
   return [
     "-p",
     "--model",
@@ -102,30 +103,80 @@ export function buildDelegateClaudeArgs({ model, effort, prompt }) {
     effort,
     "--permission-mode",
     "acceptEdits",
+    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }),
     prompt
   ];
 }
 
-export function runClaudeForeground({ binary, args, cwd, timeoutMs, run = spawnSync }) {
-  const result = run(binary, args, {
-    cwd,
-    encoding: "utf8",
-    ...(timeoutMs ? { timeout: timeoutMs } : {})
-  });
+function sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }) {
+  return [
+    ...(sessionId ? ["--output-format", "stream-json", "--verbose", "--include-partial-messages",
+      ...(resumeSessionId ? ["--resume", resumeSessionId] : ["--session-id", sessionId])] : []),
+    ...(maxBudgetUsd != null ? ["--max-budget-usd", String(maxBudgetUsd)] : []),
+  ];
+}
+
+export function runClaudeForeground({ binary, args, cwd, timeoutMs, outputFile, stderrFile, eventsFile, onProgress, job, paths, run = spawnSync }) {
+  if (job?.interactive) {
+    return import("./interactive.mjs").then(({ runInteractive }) => runInteractive({
+      job, paths, binary, outputFile, stderrFile, eventsFile, onProgress,
+    }));
+  }
+  if (eventsFile && args.includes("stream-json")) {
+    return runStream({ binary, args, cwd, outputFile, stderrFile, eventsFile, onProgress });
+  }
+  const descriptors = [];
+  let result;
+  try {
+    if (outputFile) {
+      descriptors.push(fs.openSync(outputFile, "w"));
+      descriptors.push(fs.openSync(stderrFile ?? `${outputFile}.stderr`, "w"));
+    }
+    result = run(binary, args, {
+      cwd,
+      encoding: "utf8",
+      ...(descriptors.length ? { stdio: ["ignore", ...descriptors] } : {}),
+      ...(timeoutMs ? { timeout: timeoutMs } : {})
+    });
+  } finally {
+    for (const descriptor of descriptors) fs.closeSync(descriptor);
+  }
   return {
     exitCode: result.status ?? 1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    error: result.error
+    stdout: outputFile ? fs.readFileSync(outputFile, "utf8") : result.stdout ?? "",
+    stderr: outputFile ? readFileTail(stderrFile ?? `${outputFile}.stderr`) : result.stderr ?? "",
+    error: result.error ?? (result.signal ? new Error(`Process terminated by ${result.signal}`) : undefined),
+    outputPersisted: Boolean(outputFile),
   };
 }
 
-export function spawnDetachedWorker({ nodeBinary, scriptPath, workerArgs, cwd, spawnImpl = spawn }) {
-  const child = spawnImpl(nodeBinary, [scriptPath, ...workerArgs], {
-    cwd,
-    detached: true,
-    stdio: "ignore"
-  });
-  child.unref();
-  return child;
+export function readFileTail(filePath, maxBytes = 2000) {
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    const size = fs.fstatSync(descriptor).size;
+    const buffer = Buffer.alloc(Math.min(size, maxBytes));
+    const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, Math.max(0, size - maxBytes));
+    return buffer.subarray(0, bytes).toString("utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+export async function spawnDetachedWorker({ nodeBinary, scriptPath, workerArgs, cwd, logFile, spawnImpl = spawn }) {
+  const descriptor = logFile ? fs.openSync(logFile, "a") : null;
+  try {
+    const child = spawnImpl(nodeBinary, [scriptPath, ...workerArgs], {
+      cwd,
+      detached: true,
+      stdio: descriptor === null ? "ignore" : ["ignore", descriptor, descriptor],
+    });
+    await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("spawn", resolve);
+    });
+    child.unref();
+    return child;
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+  }
 }

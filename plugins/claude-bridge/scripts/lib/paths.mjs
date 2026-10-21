@@ -49,6 +49,8 @@ export function resolvePaths({ cwd, homeDir = os.homedir() }) {
     repoStateDir,
     jobsDir: path.join(repoStateDir, "jobs"),
     outputDir: path.join(repoStateDir, "output"),
+    sessionRegistryDir: path.join(homeDir, ".claude-bridge", "repositories"),
+    mirrorDir: path.join(homeDir, ".claude-bridge", "history-viewer"),
     repoConfigPath: path.join(repoStateDir, "config.json"),
     globalConfigPath: path.join(homeDir, ".claude-bridge", "config.json")
   };

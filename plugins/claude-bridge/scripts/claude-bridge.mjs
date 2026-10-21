@@ -18,6 +18,9 @@ import {
 import { buildReviewInput as defaultBuildReviewInput } from "./lib/git.mjs";
 import { listJobRecords, readJobRecord, resolveJobRecord, updateJobRecord } from "./lib/jobs.mjs";
 import { checkGitRepository, resolvePaths, ensureStateDirs } from "./lib/paths.mjs";
+import { readPlanUsage } from "./lib/usage.mjs";
+import { registerSessionRepository } from "./lib/catalog.mjs";
+import { handleSessions as listSessions, handleShare as shareSession } from "./lib/mcp-handlers.mjs";
 import {
   enqueueDelegateJob,
   prepareDelegateJob,
@@ -46,7 +49,7 @@ function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   const positionals = [];
-  const booleanFlags = new Set(["background"]);
+  const booleanFlags = new Set(["background", "share-session", "no-share-session", "all-repositories"]);
 
   for (let index = 0; index < rest.length; index += 1) {
     const value = rest[index];
@@ -65,6 +68,12 @@ function parseArgs(argv) {
   }
 
   return { command, options, positionals };
+}
+
+function conversationOptions(options) {
+  if (options["share-session"] && options["no-share-session"]) throw new Error("Choose one session sharing preference.");
+  return { project: options.project, title: options.title,
+    shareSession: options["share-session"] ? true : options["no-share-session"] ? false : undefined };
 }
 
 function writeLine(stdio, text) {
@@ -258,23 +267,25 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
   ensureStateDirs(paths);
 
   const job = prepareReviewJob({
+    ...conversationOptions(parsed.options),
     cwd,
     paths,
     config,
     requestedModel: parsed.options.model,
     requestedEffort: parsed.options.effort,
+    maxBudgetUsd: parsed.options["max-budget-usd"] === undefined ? undefined : Number(parsed.options["max-budget-usd"]),
     baseRef: parsed.options.base ?? null,
     focusText: parsed.positionals.join(" ").trim(),
     buildReviewInputImpl: deps.buildReviewInput
   });
 
   job.request.binary = binary;
+  registerSessionRepository(paths);
   enqueueReviewJob({ jobsDir: paths.jobsDir, job });
 
   if (parsed.options.background) {
-    let child;
     try {
-      child = deps.spawnDetachedWorker({
+      await deps.spawnDetachedWorker({
         nodeBinary: process.execPath,
         scriptPath: SCRIPT_PATH,
         workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
@@ -294,26 +305,11 @@ async function handleReview({ parsed, cwd, paths, config, binary, stdio, deps })
       throw error;
     }
 
-    updateJobRecord({
-      jobsDir: paths.jobsDir,
-      jobId: job.id,
-      patch: { pid: child.pid }
-    });
-
-    const currentJob = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
-    if (isTerminalJobStatus(currentJob.status) && currentJob.pid === child.pid) {
-      updateJobRecord({
-        jobsDir: paths.jobsDir,
-        jobId: job.id,
-        patch: { pid: null }
-      });
-    }
-
     writeLine(stdio, `Started review job ${job.id}`);
     return;
   }
 
-  const result = runPreparedReviewJob({
+  const result = await runPreparedReviewJob({
     job,
     binary,
     paths,
@@ -333,22 +329,24 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
   ensureStateDirs(paths);
 
   const job = prepareDelegateJob({
+    ...conversationOptions(parsed.options),
     cwd,
     paths,
     config,
     requestedModel: parsed.options.model,
     requestedEffort: parsed.options.effort,
+    maxBudgetUsd: parsed.options["max-budget-usd"] === undefined ? undefined : Number(parsed.options["max-budget-usd"]),
     taskText,
     resumeSpecifier: parsed.options.resume ?? null
   });
 
   job.request.binary = binary;
+  registerSessionRepository(paths);
   enqueueDelegateJob({ jobsDir: paths.jobsDir, job });
 
   if (parsed.options.background) {
-    let child;
     try {
-      child = deps.spawnDetachedWorker({
+      await deps.spawnDetachedWorker({
         nodeBinary: process.execPath,
         scriptPath: SCRIPT_PATH,
         workerArgs: ["worker", "--cwd", cwd, "--job-id", job.id],
@@ -368,26 +366,11 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
       throw error;
     }
 
-    updateJobRecord({
-      jobsDir: paths.jobsDir,
-      jobId: job.id,
-      patch: { pid: child.pid }
-    });
-
-    const currentJob = readJobRecord({ jobsDir: paths.jobsDir, jobId: job.id });
-    if (isTerminalJobStatus(currentJob.status) && currentJob.pid === child.pid) {
-      updateJobRecord({
-        jobsDir: paths.jobsDir,
-        jobId: job.id,
-        patch: { pid: null }
-      });
-    }
-
     writeLine(stdio, `Started delegate job ${job.id}`);
     return;
   }
 
-  const result = runPreparedDelegateJob({
+  const result = await runPreparedDelegateJob({
     job,
     binary,
     paths,
@@ -403,9 +386,10 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
 
 async function handleWorker({ paths, jobId, deps }) {
   const job = readJobRecord({ jobsDir: paths.jobsDir, jobId });
+  job.worker = true;
 
   if (job.kind === "review") {
-    runPreparedReviewJob({
+    await runPreparedReviewJob({
       job,
       binary: job.request.binary,
       paths,
@@ -414,8 +398,8 @@ async function handleWorker({ paths, jobId, deps }) {
     return;
   }
 
-  if (job.kind === "delegate") {
-    runPreparedDelegateJob({
+  if (["delegate", "discuss"].includes(job.kind)) {
+    await runPreparedDelegateJob({
       job,
       binary: job.request.binary,
       paths,
@@ -452,6 +436,18 @@ export async function main(argv, injected = {}) {
   const binary = resolveClaudeBinary({ config });
 
   switch (parsed.command) {
+    case "sessions":
+      return writeLine(stdio, JSON.stringify(await listSessions({ cwd, homeDir, project: parsed.options.project,
+        allRepositories: Boolean(parsed.options["all-repositories"]), deps }), null, 2));
+    case "share": {
+      const result = await shareSession({ cwd, homeDir, jobId: requireStringOption(parsed.options, "job-id", "share"),
+        project: parsed.options.project, title: parsed.options.title,
+        enabled: !parsed.options["no-share-session"], deps: { ...deps, ...injected } });
+      if (result.error) throw new Error(result.error);
+      return writeLine(stdio, JSON.stringify(result, null, 2));
+    }
+    case "usage":
+      return writeLine(stdio, JSON.stringify(await (injected.readPlanUsage ?? readPlanUsage)({ binary, cwd, homeDir, refresh: true }), null, 2));
     case "setup":
       return handleSetup({ paths, stdio, deps, binary, config, cwd });
     case "status":

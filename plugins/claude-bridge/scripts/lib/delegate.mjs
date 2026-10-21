@@ -1,10 +1,12 @@
-import fs from "node:fs";
+import { resolveSession, sessionFields } from "./sessions.mjs";
+import { conversationFields } from "./catalog.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runStoredJob } from "./execution.mjs";
 
-import { buildDelegateClaudeArgs } from "./claude.mjs";
-import { resolveEffort, resolveModel } from "./config.mjs";
-import { createJobRecord, listJobRecords, updateJobRecord, writeJobRecord } from "./jobs.mjs";
+import { buildDelegateClaudeArgs, buildReviewClaudeArgs } from "./claude.mjs";
+import { resolveBudget, resolveEffort, resolveModel } from "./config.mjs";
+import { createJobRecord, writeJobRecord } from "./jobs.mjs";
 import { loadPrompt, buildDelegatePrompt } from "./prompts.mjs";
 
 const DELEGATE_PROMPT_PATH = path.join(
@@ -15,82 +17,6 @@ const DELEGATE_PROMPT_PATH = path.join(
   "delegate.md"
 );
 
-function selectFailureDiagnostics(result) {
-  const stderr = (result.stderr ?? "").trim();
-  if (stderr) {
-    return stderr;
-  }
-
-  return (
-    result.error?.message ??
-    result.error?.code ??
-    (typeof result.error === "string" ? result.error : "")
-  ).trim();
-}
-
-function resolveResumeContext({ jobsDir, jobIdOrLatest }) {
-  if (!jobIdOrLatest) {
-    return "No prior run context.";
-  }
-
-  const isReadableCompletedDelegateJob = (job) =>
-    job.kind === "delegate" &&
-    job.status === "completed" &&
-    Boolean(job.outputFile) &&
-    fs.existsSync(job.outputFile);
-  const jobTimestamp = (job) => {
-    const value = Date.parse(job.finishedAt ?? job.createdAt ?? "");
-    return Number.isNaN(value) ? 0 : value;
-  };
-  const readResumeOutput = (job, { explicitJobId = null } = {}) => {
-    try {
-      return fs.readFileSync(job.outputFile, "utf8").trim().slice(-2000);
-    } catch (error) {
-      if (explicitJobId) {
-        throw new Error(`Cannot resume from job "${explicitJobId}": output file is not readable`);
-      }
-      return null;
-    }
-  };
-
-  const jobs = listJobRecords({ jobsDir });
-
-  if (jobIdOrLatest === "latest") {
-    const candidates = jobs
-      .filter(isReadableCompletedDelegateJob)
-      .sort((left, right) => jobTimestamp(right) - jobTimestamp(left));
-
-    for (const job of candidates) {
-      const previousOutput = readResumeOutput(job);
-      if (previousOutput !== null) {
-        return previousOutput;
-      }
-    }
-
-    return "No prior run context.";
-  }
-
-  const job = jobs.find((candidate) => candidate.id === jobIdOrLatest);
-
-  if (!job) {
-    throw new Error(`Cannot resume from job "${jobIdOrLatest}": job not found`);
-  }
-
-  if (job.kind !== "delegate") {
-    throw new Error(`Cannot resume from job "${jobIdOrLatest}": only completed delegate jobs can be resumed`);
-  }
-
-  if (job.status !== "completed") {
-    throw new Error(`Cannot resume from job "${jobIdOrLatest}": job is not completed`);
-  }
-
-  if (!job.outputFile || !fs.existsSync(job.outputFile)) {
-    throw new Error(`Cannot resume from job "${jobIdOrLatest}": output file is not readable`);
-  }
-
-  return readResumeOutput(job, { explicitJobId: jobIdOrLatest });
-}
-
 export function prepareDelegateJob({
   cwd,
   paths,
@@ -98,31 +24,42 @@ export function prepareDelegateJob({
   requestedModel,
   requestedEffort,
   taskText,
-  resumeSpecifier
+  resumeSpecifier,
+  maxBudgetUsd,
+  project,
+  title,
+  shareSession,
+  kind = "delegate"
 }) {
   const template = loadPrompt(DELEGATE_PROMPT_PATH);
-  const resumeContext = resolveResumeContext({
-    jobsDir: paths.jobsDir,
-    jobIdOrLatest: resumeSpecifier
-  });
-  const prompt = buildDelegatePrompt({
+  const source = resolveSession({ jobsDir: paths.jobsDir, specifier: resumeSpecifier, cwd, project });
+  const session = sessionFields(source);
+  const prompt = kind === "discuss" || source ? taskText : buildDelegatePrompt({
     template,
     task: taskText,
-    resumeContext
+    resumeContext: "New conversation."
   });
 
-  const model = resolveModel({ command: "delegate", requestedModel, config });
-  const effort = resolveEffort({ requestedEffort, config });
-  const args = buildDelegateClaudeArgs({ model, effort, prompt });
+  const model = resolveModel({ command: "delegate", requestedModel: requestedModel ?? source?.model, config });
+  const effort = resolveEffort({ requestedEffort: requestedEffort ?? source?.effort, config });
+  const budget = resolveBudget(maxBudgetUsd ?? source?.maxBudgetUsd, config);
+  const args = (kind === "discuss" ? buildReviewClaudeArgs : buildDelegateClaudeArgs)({
+    model, effort, prompt, sessionId: session.sessionId, resumeSessionId: source?.sessionId, maxBudgetUsd: budget,
+  });
 
-  return createJobRecord({
-    kind: "delegate",
+  const job = createJobRecord({
+    kind,
     cwd,
     summary: taskText,
     model,
     effort,
     request: { binary: null, args, prompt }
   });
+  return Object.assign(job, session, conversationFields({ source, cwd, summary: taskText, config, project, title, shareSession }),
+    { interactive: true, maxBudgetUsd: budget, settingsSource: {
+    model: requestedModel ? "request" : source ? "session" : config.sources?.delegate ?? "built-in",
+    effort: requestedEffort ? "request" : source ? "session" : config.sources?.effort ?? "built-in",
+  } });
 }
 
 export function enqueueDelegateJob({ jobsDir, job }) {
@@ -137,33 +74,5 @@ export function runPreparedDelegateJob({
   runClaudeForeground,
   jobsDir = paths.jobsDir
 }) {
-  const outputFile = path.join(paths.outputDir, `${job.id}.txt`);
-
-  updateJobRecord({
-    jobsDir,
-    jobId: job.id,
-    patch: { status: "running", startedAt: new Date().toISOString() }
-  });
-
-  const result = runClaudeForeground({
-    binary,
-    args: job.request.args,
-    cwd: job.cwd
-  });
-
-  fs.writeFileSync(outputFile, result.stdout ?? "");
-
-  updateJobRecord({
-    jobsDir,
-    jobId: job.id,
-    patch: {
-      status: result.exitCode === 0 ? "completed" : "failed",
-      outputFile,
-      pid: null,
-      stderrTail: selectFailureDiagnostics(result).slice(-2000),
-      finishedAt: new Date().toISOString()
-    }
-  });
-
-  return result;
+  return runStoredJob({ job, binary, paths, run: runClaudeForeground, jobsDir });
 }
