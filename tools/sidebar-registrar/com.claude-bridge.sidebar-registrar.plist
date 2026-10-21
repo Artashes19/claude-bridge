@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Install: copy to ~/Library/LaunchAgents/, replace __REGISTRAR_DIR__ and __HOME__,
+       then: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-bridge.sidebar-registrar.plist -->
+  <key>Label</key><string>com.claude-bridge.sidebar-registrar</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>__REGISTRAR_DIR__/registrar.mjs</string>
+    <string>--bridge-root</string><string>/home/amkrtchyan/plugins/claude-bridge</string>
+    <string>--ssh-name</string><string>cluster</string>
+  </array>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- ssh needs the agent / keychain-backed key; the login session provides SSH_AUTH_SOCK via launchd. -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key><string>__HOME__/.claude-bridge/sidebar-registrar/registrar.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/.claude-bridge/sidebar-registrar/registrar.err</string>
+</dict>
+</plist>
