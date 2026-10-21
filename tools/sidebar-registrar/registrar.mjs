@@ -42,7 +42,7 @@ export function sessionTitle(session) {
 }
 
 /** Build the desktop session record for one catalog session. */
-export function buildRecord({ session, sshHost, transcriptPath, transcriptMtimeMs, now = Date.now() }) {
+export function buildRecord({ session, sshHost, sshConfig, transcriptPath, transcriptMtimeMs, now = Date.now() }) {
   if (!UUID.test(session.sessionId)) throw new Error(`Session id is not a UUID: ${session.sessionId}`);
   const createdAt = toMs(session.createdAt, now);
   const lastActivityAt = Math.max(createdAt, toMs(transcriptMtimeMs, createdAt));
@@ -58,12 +58,15 @@ export function buildRecord({ session, sshHost, transcriptPath, transcriptMtimeM
     title: sessionTitle(session),
     titleSource: session.title ? "user" : "auto",
     permissionMode: PERMISSION_MODE_BY_KIND[session.kind] ?? "default",
-    sshConfig: { sshHost },
+    sshConfig: { sshHost: sshConfig?.sshHost ?? sshHost },
     sshRemoteTranscriptPath: transcriptPath,
     completedTurns: 0,
     alwaysAllowedReasons: [],
     sessionPermissionUpdates: [],
   };
+  for (const key of ["sshPort", "sshIdentityFile"]) {
+    if (sshConfig?.[key] !== undefined) record.sshConfig[key] = sshConfig[key];
+  }
   if (typeof session.model === "string" && session.model.startsWith("claude-")) record.model = session.model;
   if (EFFORTS.has(session.effort)) record.effort = session.effort;
   return record;
@@ -77,7 +80,7 @@ export function hashText(text) {
  * Decide what to do for each catalog session given the current store contents.
  * `store` abstracts the filesystem so this stays testable.
  */
-export function planActions({ sessions, store, state, sshHost, now = Date.now() }) {
+export function planActions({ sessions, store, state, sshHost, sshConfig, now = Date.now() }) {
   const actions = [];
   for (const session of sessions) {
     const id = session.sessionId;
@@ -86,7 +89,7 @@ export function planActions({ sessions, store, state, sshHost, now = Date.now() 
     if (!session.resumable) { reason(`not resumable yet (status ${session.status})`); continue; }
     if (!session.transcript) { reason("transcript not found on host"); continue; }
     if (store.hasTombstone(id)) { reason("desktop deleted this session (tombstone present)"); continue; }
-    const record = buildRecord({ session, sshHost, transcriptPath: session.transcript.path,
+    const record = buildRecord({ session, sshHost, sshConfig, transcriptPath: session.transcript.path,
       transcriptMtimeMs: session.transcript.mtimeMs, now });
     const text = JSON.stringify(record, null, 2);
     const existing = store.readRecord(id);
@@ -168,16 +171,21 @@ export function resolveSshHost({ userData, name }) {
 
 // ---------- remote side (over ssh) ----------
 
-export function runSsh({ ssh, alias, command, input }) {
-  const result = spawnSync(ssh, ["-o", "BatchMode=yes", alias, command], { encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 });
+export function runSsh({ ssh, alias, command, input, timeoutMs = 30_000 }) {
+  const result = spawnSync(ssh, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, command],
+    { encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024, timeout: timeoutMs });
+  if (result.error) throw new Error(`Remote command failed: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`ssh ${alias} failed (${result.status ?? result.signal}): ${(result.stderr ?? "").trim()}`);
   return result.stdout;
 }
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
+// Expand only the remote home prefix; keep the rest of the path literal.
+const remotePath = (value) => value.startsWith("~/") ? `"$HOME"/${shellQuote(value.slice(2))}` : shellQuote(value);
+
 export function fetchCatalog({ ssh, alias, bridgeScript, bridgeRoot }) {
-  const command = `node ${shellQuote(bridgeScript)} sessions --all-repositories --cwd ${shellQuote(bridgeRoot)}`;
+  const command = `node ${remotePath(bridgeScript)} sessions --all-repositories --cwd ${remotePath(bridgeRoot)}`;
   const catalog = JSON.parse(runSsh({ ssh, alias, command }));
   if (!Array.isArray(catalog.sessions)) throw new Error("Unexpected catalog output: no sessions array.");
   return catalog;
@@ -284,7 +292,7 @@ export async function main(argv = process.argv.slice(2), io = { log: console.log
 
   const store = makeStore(storeDir);
   const state = loadState(statePath);
-  const actions = planActions({ sessions, store, state, sshHost: sshConfig.sshHost });
+  const actions = planActions({ sessions, store, state, sshConfig });
 
   let written = 0;
   if (!options.dryRun) {
@@ -295,8 +303,8 @@ export async function main(argv = process.argv.slice(2), io = { log: console.log
       state.records[action.sessionId] = { hash: hashText(action.text), writtenAt: new Date().toISOString(),
         registrarVersion: REGISTRAR_VERSION, cwd: action.record.cwd, title: action.record.title };
       written++;
+      saveState(statePath, state);
     }
-    if (written > 0) saveState(statePath, state);
   }
 
   const report = { account, org, storeDir, sshHost: sshConfig.sshHost, dryRun: options.dryRun,

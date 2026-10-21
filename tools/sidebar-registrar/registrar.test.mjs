@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { slugForCwd, buildRecord, planActions, makeStore, hashText, parseProbe, parseArgs, selectSessions,
-  resolveStoreDir, resolveSshHost, sessionTitle } from "./registrar.mjs";
+  resolveStoreDir, resolveSshHost, sessionTitle, main, runSsh } from "./registrar.mjs";
 
 const SID = "b5e933d5-ff56-4dfb-9f93-7d2296c38ec8";
 const session = (over = {}) => ({ sessionId: SID, jobId: "request-1", cwd: "/home/u/repo", kind: "discuss",
@@ -129,4 +129,79 @@ test("resolveStoreDir and resolveSshHost read the desktop app's own config files
   assert.equal(resolveSshHost({ userData }).sshHost, "1.2.3.4");
   assert.equal(resolveSshHost({ userData, name: "cluster" }).name, "cluster");
   assert.throws(() => resolveSshHost({ userData, name: "nope" }), /No desktop SSH config/);
+});
+
+function integrationFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-integration-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const remoteHome = path.join(root, "remote home");
+  const checkout = path.join(remoteHome, "checkout's directory");
+  const script = path.join(checkout, "plugins/claude-bridge/scripts/claude-bridge.mjs");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  const catalogSession = session({ cwd: checkout });
+  fs.writeFileSync(script, `console.log(${JSON.stringify(JSON.stringify({ sessions: [catalogSession] }))});\n`);
+  const transcript = path.join(remoteHome, ".claude/projects", slugForCwd(checkout), `${SID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "{}\n");
+  const userData = path.join(root, "desktop");
+  const account = "685a13e9-afa2-430c-8671-090e504ea4c6", org = "9583b2c6-d500-41c5-899a-f9f574856eac";
+  const storeDir = path.join(userData, "claude-code-sessions", account, org);
+  fs.mkdirSync(storeDir, { recursive: true });
+  fs.writeFileSync(path.join(userData, "config.json"), JSON.stringify({ lastKnownAccountUuid: account }));
+  const sshConfig = { name: "fixture", sshHost: "example.invalid", sshPort: 2222,
+    sshIdentityFile: "/fixture/key", id: "config-only" };
+  fs.writeFileSync(path.join(userData, "ssh_configs.json"), JSON.stringify({ configs: [sshConfig] }));
+  const ssh = path.join(root, "fixture-ssh");
+  fs.writeFileSync(ssh, `#!${process.execPath}
+const { spawnSync } = require('node:child_process');
+const result = spawnSync('sh', ['-c', process.argv.at(-1)], {
+  encoding: 'utf8', timeout: 5000, input: require('node:fs').readFileSync(0),
+  env: { ...process.env, HOME: ${JSON.stringify(remoteHome)} }
+});
+process.stdout.write(result.stdout ?? '');
+process.stderr.write(result.stderr ?? '');
+process.exit(result.status ?? 1);
+`, { mode: 0o700 });
+  const statePath = path.join(root, "state/state.json");
+  const args = ["--user-data", userData, "--state", statePath, "--ssh-bin", ssh,
+    "--bridge-root", "~/checkout's directory", "--include-tmp", "--json"];
+  const recordPath = path.join(storeDir, `local_${SID}.json`);
+  const run = async (...extra) => {
+    let report;
+    await main([...args, ...extra], { log: (text) => { report = JSON.parse(text); }, error: () => {} });
+    return report;
+  };
+  return { run, recordPath, statePath, storeDir, transcript, sshConfig, root };
+}
+
+test("pull-and-write flow expands remote home, probes real transcripts and preserves SSH settings", async (t) => {
+  const fixture = integrationFixture(t);
+  const dry = await fixture.run("--dry-run");
+  assert.equal(dry.actions[0].kind, "create");
+  assert.equal(fs.existsSync(fixture.recordPath), false);
+  assert.equal(fs.existsSync(fixture.statePath), false);
+  const applied = await fixture.run();
+  assert.equal(applied.written, 1);
+  const record = JSON.parse(fs.readFileSync(fixture.recordPath, "utf8"));
+  assert.deepEqual(record.sshConfig, { sshHost: fixture.sshConfig.sshHost,
+    sshPort: 2222, sshIdentityFile: "/fixture/key" });
+  assert.equal(record.sshRemoteTranscriptPath, fixture.transcript);
+  const owned = JSON.parse(fs.readFileSync(fixture.statePath, "utf8")).records[SID];
+  assert.equal(owned.hash, hashText(fs.readFileSync(fixture.recordPath, "utf8")));
+  assert.equal((await fixture.run()).written, 0);
+  fs.writeFileSync(fixture.recordPath, JSON.stringify({ ...record, title: "User title" }));
+  assert.match((await fixture.run()).actions[0].why, /modified by the desktop app/);
+  assert.equal(JSON.parse(fs.readFileSync(fixture.recordPath, "utf8")).title, "User title");
+  fs.unlinkSync(fixture.recordPath);
+  fs.writeFileSync(path.join(fixture.storeDir, `deleted_${SID}`), "");
+  assert.match((await fixture.run()).actions[0].why, /tombstone/);
+  assert.equal(fs.existsSync(fixture.recordPath), false);
+});
+
+test("remote commands terminate on timeout instead of hanging scheduled pulls", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-timeout-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ssh = path.join(root, "fixture-ssh");
+  fs.writeFileSync(ssh, `#!${process.execPath}\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
+  assert.throws(() => runSsh({ ssh, alias: "fixture", command: "unused", timeoutMs: 100 }), /ETIMEDOUT/);
 });
