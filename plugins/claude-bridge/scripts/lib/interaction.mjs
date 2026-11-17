@@ -65,14 +65,80 @@ export function submitSteering({ jobsDir, jobId, message, requestId, interrupt =
   const id = crypto.createHash("sha256").update(requestId).digest("hex");
   const directory = controlDir(jobsDir, jobId);
   const destination = path.join(directory, `command-${id}.json`);
-  if (!allowNew && !fs.existsSync(destination)) throw new Error("This job has ended; use a resumed discussion for another turn.");
   const value = { id, message, interrupt, requestId, createdAt: new Date().toISOString(), createdOrder: process.hrtime.bigint().toString() };
-  const created = saveOnce(destination, value);
+  const created = fs.existsSync(destination) ? false : withSteeringLock(directory, () => {
+    if (fs.existsSync(destination)) return false;
+    if (!allowNew || fs.existsSync(path.join(directory, "steering-closed.json"))) {
+      throw new Error("This job has stopped accepting input; use a resumed discussion for another turn. This message was not queued.");
+    }
+    return saveOnce(destination, value);
+  });
   if (!created) {
     const previous = JSON.parse(fs.readFileSync(destination, "utf8"));
     if (previous.message !== message || previous.interrupt !== interrupt) throw new Error("This requestId already identifies a different steering message.");
   }
   return { ...steeringReceipt(directory, value), reused: !created };
+}
+
+function withSteeringLock(directory, action) {
+  const lock = path.join(directory, "steering.lock");
+  let acquired = false;
+  for (let attempt = 0; attempt < 50 && !acquired; attempt++) {
+    acquired = saveOnce(lock, { pid: process.pid });
+    if (!acquired) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  if (!acquired) {
+    throw new Error("Steering state is busy; retry with the same requestId. No new message was queued.");
+  }
+  try { return action(); } finally { fs.unlinkSync(lock); }
+}
+
+export function unresolvedSteering(jobsDir, jobId) {
+  const directory = controlDir(jobsDir, jobId);
+  return records(directory, "command-").map((command) => steeringReceipt(directory, command))
+    .filter((item) => item.state !== "completed");
+}
+
+// Serialize accepting the final message with closing the input channel.
+export function sealSteering(jobsDir, jobId, force = false) {
+  const directory = controlDir(jobsDir, jobId);
+  return withSteeringLock(directory, () => {
+    if (!force && unresolvedSteering(jobsDir, jobId).length) return false;
+    saveOnce(path.join(directory, "steering-closed.json"), { closedAt: new Date().toISOString() });
+    return true;
+  });
+}
+
+export function createSteeringTracker(directory) {
+  const messages = new Map();
+  const responding = new Set();
+  const update = (uuid, patch) => {
+    const record = messages.get(uuid);
+    if (!record || ["completed", "failed"].includes(record.state)) return;
+    Object.assign(record, patch);
+    saveControl(path.join(directory, `receipt-${record.commandId}.json`), record);
+  };
+  return {
+    register(record) { messages.set(record.messageUuid, record); },
+    observe(event) {
+      if (event.parent_tool_use_id || !["assistant", "stream_event", "result"].includes(event.type)) return;
+      const ids = new Set([...(event.user_message_uuids ?? []), event.user_message_uuid].filter((id) => messages.has(id)));
+      for (const id of ids) {
+        responding.add(id);
+        update(id, { state: "responding", receivedAt: new Date().toISOString() });
+      }
+      if (event.type !== "result") return;
+      for (const id of responding) update(id, {
+        state: event.subtype === "success" && !event.is_error &&
+          (!event.terminal_reason || event.terminal_reason === "completed") ? "completed" : "failed",
+        responseAt: new Date().toISOString(), resultUuid: event.uuid ?? null,
+        resultIndex: event.result_index ?? null, terminalReason: event.terminal_reason ?? null,
+      });
+      responding.clear();
+    },
+    waitingForReceipt() { return [...messages.values()].some((record) => record.state === "dispatched"); },
+    hasFailure() { return [...messages.values()].some((record) => record.state === "failed"); },
+  };
 }
 
 function steeringReceipt(directory, command) {

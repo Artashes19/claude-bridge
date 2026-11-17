@@ -87,6 +87,10 @@ test("MCP server responds to initialize and lists discussion and recovery tools"
     assert.ok(toolNames.includes("bridge_sessions"));
     assert.ok(toolNames.includes("bridge_share"));
     assert.equal(toolNames.length, 12);
+    const schemas = Object.fromEntries(toolsResponse.result.tools.map((tool) => [tool.name, tool.inputSchema.properties]));
+    assert.deepEqual(schemas.bridge_delegate.permissionMode.enum, ["acceptEdits", "bypassPermissions"]);
+    assert.equal(schemas.bridge_discuss.permissionMode, undefined);
+    assert.equal(schemas.bridge_review.permissionMode, undefined);
   } finally {
     child.kill();
   }

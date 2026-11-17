@@ -41,7 +41,7 @@ function taskResult(result) {
   };
 }
 
-const server = new McpServer({ name: "claude-bridge", version: "0.6.0" });
+const server = new McpServer({ name: "claude-bridge", version: "0.7.0" });
 const deliveryFields = {
   deliveryThreadId: z.string().optional().describe("Originating host thread ID, obtained from CODEX_THREAD_ID. Enables automatic delivery of questions and completion into that exact thread. Never guess or reuse another thread's ID."),
   deliveryEndpoint: z.string().optional().describe("Absolute path to the local app-server socket; normally discovered automatically when exactly one private socket exists."),
@@ -76,7 +76,7 @@ server.tool(
     cwd: z.string().optional().describe("Working directory (must be a Git repo)"),
     ...deliveryFields,
     ...conversationFields,
-    model: z.string().optional().describe("Model alias: opus, sonnet, or haiku"),
+    model: z.string().optional().describe("Model alias: fable, opus, sonnet, haiku, or a full model ID"),
     maxBudgetUsd: z.number().positive().optional().describe("Estimated spending cap in USD for this run; restored costs from earlier runs do not count. May overshoot; not a billing guarantee."),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe("Effort level: low, medium, high, xhigh, max; defaults to high. Resumed turns inherit the previous effort unless overridden."),
     baseRef: z.string().optional().describe("Git base ref for range review (e.g. main)"),
@@ -96,9 +96,10 @@ server.tool(
   {
     cwd: z.string().optional().describe("Working directory (must be a Git repo)"),
     task: z.string().describe("Task description for Claude to execute"),
+    permissionMode: z.enum(["acceptEdits", "bypassPermissions"]).optional().describe("Delegation permissions. Use bypassPermissions only when the user authorizes full-access execution; it enables native permission bypass and disables the optional shell sandbox. OS and managed restrictions still apply. Resumes inherit explicit choices; otherwise host trusted-directory defaults apply. acceptEdits overrides full-access defaults for this turn."),
     ...deliveryFields,
     ...conversationFields,
-    model: z.string().optional().describe("Model alias: opus, sonnet, or haiku"),
+    model: z.string().optional().describe("Model alias: fable, opus, sonnet, haiku, or a full model ID"),
     maxBudgetUsd: z.number().positive().optional().describe("Estimated spending cap in USD for this run; restored costs from earlier runs do not count. May overshoot; not a billing guarantee."),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe("Effort level: low, medium, high, xhigh, max; defaults to high. Resumed turns inherit the previous effort unless overridden."),
     resume: z.string().optional().describe("Continue the saved native conversation: a job ID or latest. Keeps full session context; older report-only jobs cannot be resumed."),
@@ -120,7 +121,7 @@ server.tool(
     ...deliveryFields,
     ...conversationFields,
     resume: z.string().optional().describe("Previous job ID, or latest; omit to start a new conversation"),
-    model: z.string().optional(),
+    model: z.string().optional().describe("Model alias: fable, opus, sonnet, haiku, or a full model ID"),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
     maxBudgetUsd: z.number().positive().optional().describe("Estimated spending cap in USD for this run; restored costs from earlier runs do not count. May overshoot; not a billing guarantee."),
     background: z.boolean().optional(),
@@ -181,9 +182,9 @@ server.tool("bridge_answer",
   async (options) => taskResult(await handleAnswer(options)));
 
 server.tool("bridge_steer",
-  "Send input within the same running job. Queued input may be consumed after the current response and cause another model turn. Dispatched means input queued, not incorporated. Important corrections need interrupt:true while active or an explicit resumed follow-up after completion; verify the resulting answer. Reuse requestId for retries.",
+  "Send input within the same running job. Queued input may cause a follow-up turn. The job waits for a matching response for each accepted message; inspect interaction.steering for dispatched, responding, completed or failed state. Completed proves a response to that input, not semantic compliance; verify the answer. Unresolved input is retained, never automatically replayed. Reuse requestId for retries.",
   { cwd: z.string().optional(), jobId: z.string(), message: z.string().min(1).max(100000),
-    requestId: z.string().min(1).max(128), interrupt: z.boolean().optional().describe("Request interruption before queuing the message. Defaults to false; queued input may be handled after the current response. Neither mode proves incorporation: verify the resulting answer.") },
+    requestId: z.string().min(1).max(128), interrupt: z.boolean().optional().describe("Interrupt the active response before sending an urgent correction. Defaults to false, allowing the current response to finish. Both modes wait for a matching response; verify its content.") },
   async (options) => taskResult(await handleSteer(options)));
 
 server.tool(

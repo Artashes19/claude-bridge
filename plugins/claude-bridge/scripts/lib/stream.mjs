@@ -25,6 +25,9 @@ export function createProjector({ outputFile, onProgress = () => {} }) {
       progress.sessionReady = true;
       progress.actualModel = event.model;
     }
+    if (event.type === "system" && typeof event.permissionMode === "string") {
+      progress.actualPermissionMode = event.permissionMode;
+    }
     if (event.type === "system" && event.subtype === "api_retry") {
       progress.retry = { attempt: event.attempt, delayMs: event.retry_delay_ms, error: event.error };
     }
@@ -57,8 +60,18 @@ export function createProjector({ outputFile, onProgress = () => {} }) {
       }
       progress.actualModel = message?.model ?? progress.actualModel;
       progress.latestMessageUsage = message?.usage ?? progress.latestMessageUsage;
+      if (typeof message?.usage?.input_tokens === "number") {
+        const usage = message.usage;
+        progress.context = { ...progress.context, inputTokens:
+          usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) };
+      }
       const tool = message?.content?.find((block) => block.type === "tool_use");
       if (tool) { progress.activity = "tool"; progress.tool = tool.name; }
+    }
+    if (event.type === "system" && event.subtype === "compact_boundary" && !event.parent_tool_use_id) {
+      progress.context = { ...progress.context, inputTokens: event.compact_metadata?.post_tokens ?? null,
+        compactions: (progress.context?.compactions ?? 0) + 1,
+        lastCompaction: { ...event.compact_metadata, at: progress.lastActivityAt } };
     }
     if (event.type === "result") {
       terminal = event;

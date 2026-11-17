@@ -38,6 +38,8 @@ test("stable request IDs recover active and completed jobs without another launc
     assert.equal(launches, 1);
     const conflict = await handleDelegate({ ...options, task: "different task" });
     assert.match(conflict.error, /different request/);
+    const permissionConflict = await handleDelegate({ ...options, permissionMode: "bypassPermissions" });
+    assert.match(permissionConflict.error, /different request/);
     assert.equal(launches, 1);
     const separate = await handleDelegate({ ...options, requestId: "request-2" });
     assert.notEqual(separate.jobId, first.jobId);
@@ -45,6 +47,26 @@ test("stable request IDs recover active and completed jobs without another launc
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test("permission choices reach stored requests and distinguish active submissions", async (t) => {
+  const cwd = makeTmpRepo(); t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  let launches = 0;
+  const options = { cwd, homeDir: cwd, task: "permission fixture", background: true,
+    deps: { ...gitOk(cwd), spawnDetachedWorker: async () => { launches++; return { pid: process.pid }; } } };
+  const full = await handleDelegate({ ...options, permissionMode: "bypassPermissions" });
+  const repeat = await handleDelegate({ ...options, permissionMode: "bypassPermissions" });
+  assert.equal(full.jobId, repeat.jobId);
+  const limited = await handleDelegate({ ...options, permissionMode: "acceptEdits" });
+  assert.notEqual(full.jobId, limited.jobId);
+  assert.equal(launches, 2);
+  const job = readJobRecord({ jobsDir: path.join(cwd, ".claude-bridge", "jobs"), jobId: full.jobId });
+  assert.equal(job.permissionMode, "bypassPermissions");
+  const status = await handleStatus({ cwd, homeDir: cwd, deps: gitOk(cwd) });
+  assert.equal(status.jobs.find((j) => j.id === full.jobId).permissions.mode, "bypassPermissions");
+  const result = await handleResult({ cwd, homeDir: cwd, jobId: full.jobId });
+  assert.equal(result.permissions.source, "request");
+  assert.equal(result.actualPermissionMode, null);
 });
 
 test("identical active submissions without an ID reuse their job", async () => {

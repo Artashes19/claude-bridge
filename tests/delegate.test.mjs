@@ -20,6 +20,19 @@ function assumeGitRepository() {
   return { valid: true };
 }
 
+test("command-line delegation forwards full permission mode to the saved execution", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "permission-cli-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, "repo"); fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+  let observed;
+  await main(["delegate", "--cwd", repo, "--permission-mode", "bypassPermissions", "Check fixture"], {
+    homeDir: path.join(root, "home"), stdio: createStdoutBuffer(), checkGitRepository: assumeGitRepository,
+    runClaudeForeground: ({ job, args }) => { observed = { job, args }; return { exitCode: 0, stdout: "Checked", stderr: "" }; },
+  });
+  assert.equal(observed.job.permissionMode, "bypassPermissions");
+  assert.equal(observed.args[observed.args.indexOf("--permission-mode")+1], "bypassPermissions");
+});
+
 test("delegate foreground stores a completed job and prints Claude output", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-delegate-"));
   const repoRoot = path.join(tempRoot, "repo");

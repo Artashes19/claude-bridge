@@ -11,6 +11,7 @@ import { createProjector, recoverJournal, runStream } from '../plugins/claude-br
 import { lockSession } from '../plugins/claude-bridge/scripts/lib/sessions.mjs';
 import { createJobRecord, writeJobRecord, readJobRecord } from '../plugins/claude-bridge/scripts/lib/jobs.mjs';
 import { resolvePaths, ensureStateDirs } from '../plugins/claude-bridge/scripts/lib/paths.mjs';
+import { submitSteering } from '../plugins/claude-bridge/scripts/lib/interaction.mjs';
 
 function fixture(t) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-session-test-'));
@@ -24,6 +25,36 @@ const line = (event) => JSON.stringify(event);
 const init = (sessionId) => ({ type: 'system', subtype: 'init', session_id: sessionId, model: 'resolved-model' });
 const reply = (text, id = 'message-one') => ({ type: 'assistant', message: { id, content: [{ type: 'text', text }] } });
 const done = { type: 'result', subtype: 'success', is_error: false, usage: { output_tokens: 5 }, total_cost_usd: 0.1 };
+
+test('context counts cached input and records native compaction without summing cumulative usage', (t) => {
+  const { paths } = fixture(t);
+  const projector = createProjector({ outputFile: path.join(paths.outputDir, 'context.txt') });
+  projector.consume(line({ type: 'assistant', message: { id: 'usage-one', content: [], usage: {
+    input_tokens: 100, cache_creation_input_tokens: 20000, cache_read_input_tokens: 300000, output_tokens: 1000,
+  } } }));
+  assert.equal(projector.state().progress.context.inputTokens, 320100);
+  projector.consume(line({ ...done, usage: { input_tokens: 9999999 } }));
+  assert.equal(projector.state().progress.context.inputTokens, 320100);
+  projector.consume(line({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 367020, post_tokens: 12000 } }));
+  assert.equal(projector.state().progress.context.compactions, 1);
+  assert.equal(projector.state().progress.context.inputTokens, 12000);
+  assert.equal(projector.state().progress.context.lastCompaction.pre_tokens, 367020);
+});
+
+test('crash recovery cannot promote an earlier answer while accepted steering is unresolved', async (t) => {
+  const { cwd, paths, job } = saved(t, { status: 'running', pid: 123456, interactive: true });
+  const eventsFile = path.join(paths.outputDir, 'unfinished.events.jsonl');
+  fs.writeFileSync(eventsFile, `${line({ ...done, result: 'Earlier answer', queued_turn_count: 0 })}\n`);
+  job.eventsFile = eventsFile;
+  writeJobRecord({ jobsDir: paths.jobsDir, job });
+  submitSteering({ jobsDir: paths.jobsDir, jobId: job.id, message: 'Unanswered correction', requestId: 'pending' });
+  const result = await handleResult({ cwd, homeDir: cwd, jobId: job.id, deps: {
+    killProcess() { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); },
+  } });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.output, 'Earlier answer');
+  assert.equal(result.interaction.steering[0].state, 'queued');
+});
 
 function saved(t, patch = {}) {
   const { cwd, paths } = fixture(t);

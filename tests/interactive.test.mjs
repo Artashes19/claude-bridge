@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { runInteractive } from "../plugins/claude-bridge/scripts/lib/interactive.mjs";
-import { submitAnswer, submitSteering, interactionState, records, controlDir, saveOnce } from "../plugins/claude-bridge/scripts/lib/interaction.mjs";
+import { submitAnswer, submitSteering, interactionState, records, controlDir, saveOnce, sealSteering } from "../plugins/claude-bridge/scripts/lib/interaction.mjs";
 import { readEvidence, searchEvidence, listEvidence, evidencePath } from "../plugins/claude-bridge/scripts/lib/evidence.mjs";
 import { queueNotification, deliverPending } from "../plugins/claude-bridge/scripts/lib/host-delivery.mjs";
 
@@ -52,8 +52,109 @@ test("paused clarification accepts a durable answer and continues the same query
   assert.ok(progress.some((value) => value.status === "needs_input"));
   assert.ok(progress.some((value) => value.status === "running"));
   assert.deepEqual(observedOptions.tools, ["AskUserQuestion"]);
+  assert.deepEqual(observedOptions.extraArgs, { autocompact: "400000", "strict-mcp-config": null });
+  assert.equal(observedOptions.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, "400000");
+  assert.equal(observedOptions.settings.autoCompactEnabled, true);
   assert.deepEqual(observedOptions.allowedTools, ["mcp__evidence__read", "mcp__evidence__search", "mcp__evidence__list"]);
   assert.equal((await observedOptions.canUseTool("Bash", {}, {})).behavior, "deny");
+});
+
+test("resuming uses the current repository compaction policy and native session", async (t) => {
+  const { root, jobsDir } = fixture(t);
+  const globalConfigPath = path.join(root, "host.json"), repoConfigPath = path.join(root, "repo.json");
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ runtime: { autoCompactWindow: 300000 } }));
+  fs.writeFileSync(repoConfigPath, JSON.stringify({ runtime: { autoCompactWindow: 450000 } }));
+  const job = { id: "resume-policy", kind: "delegate", cwd: root, resumedFrom: "earlier-job",
+    sessionId: "native-history", autoCompactWindow: 900000, request: { prompt: "Continue" } };
+  const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root, repoConfigPath, globalConfigPath }, binary: "unused",
+    outputFile: path.join(root, "output"), stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
+    onProgress() {}, queryImpl: ({ prompt, options }) => ({ close() {}, async *[Symbol.asyncIterator]() {
+      assert.equal(options.resume, "native-history");
+      assert.equal(options.extraArgs.autocompact, "450000");
+      assert.equal(options.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, "450000");
+      assert.equal(options.env.PATH, process.env.PATH);
+      assert.equal(options.extraArgs["strict-mcp-config"], undefined);
+      const message = (await prompt[Symbol.asyncIterator]().next()).value;
+      assert.equal(message.message.content, "Continue");
+      yield success("Resumed");
+    } }) });
+  assert.equal(result.exitCode, 0, result.error?.message);
+});
+
+test("batched steering survives compaction and waits for the matching final result", async (t) => {
+  const { root, jobsDir } = fixture(t);
+  const job = { id: "batch-input", kind: "discuss", cwd: root, sessionId: "saved-session", request: { prompt: "Start" } };
+  const queryImpl = ({ prompt }) => ({ close() {}, async *[Symbol.asyncIterator]() {
+    const messages = prompt[Symbol.asyncIterator]();
+    await messages.next();
+    for (const requestId of ["first", "second"]) submitSteering({ jobsDir, jobId: job.id, message: requestId, requestId });
+    const first = (await messages.next()).value, second = (await messages.next()).value;
+    yield { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 367001, post_tokens: 14000 } };
+    yield { type: "assistant", user_message_uuids: [first.uuid, second.uuid], message: { id: "combined", content: [{ type: "text", text: "Combined response" }] } };
+    assert.ok(interactionState(jobsDir, job.id).steering.every((item) => item.state === "responding"));
+    yield { ...success("Combined response"), user_message_uuid: second.uuid, queued_turn_count: 0, uuid: "result-batch", result_index: 0 };
+  } });
+  const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused",
+    outputFile: path.join(root, "output"), stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
+    onProgress() {}, queryImpl, pollMs: 1 });
+  assert.equal(result.exitCode, 0, result.error?.message);
+  assert.ok(interactionState(jobsDir, job.id).steering.every((item) => item.state === "completed" && item.resultUuid === "result-batch"));
+});
+
+for (const outcome of ["missing", "error", "aborted"]) test(`incomplete steering responses cannot report success: ${outcome}`, async (t) => {
+  const { root, jobsDir } = fixture(t);
+  const job = { id: "unconfirmed-input", kind: "discuss", cwd: root, sessionId: "saved-session", request: { prompt: "Start" } };
+  let sends = 0;
+  const queryImpl = ({ prompt }) => ({ close() {}, async *[Symbol.asyncIterator]() {
+    const messages = prompt[Symbol.asyncIterator](); await messages.next();
+    submitSteering({ jobsDir, jobId: job.id, message: "Correction", requestId: "one" });
+    const sent = (await messages.next()).value; sends++;
+    yield outcome === "error" ? { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Interrupted"], user_message_uuid: sent.uuid } :
+      outcome === "aborted" ? { ...success("Partial answer"), terminal_reason: "aborted_streaming", user_message_uuid: sent.uuid } :
+      { ...success("Original answer"), queued_turn_count: 0, user_message_uuid: "unrelated-message" };
+  } });
+  const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused",
+    outputFile: path.join(root, "output"), stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
+    onProgress() {}, queryImpl, pollMs: 1 });
+  assert.equal(result.exitCode, 1);
+  assert.equal(sends, 1);
+  const receipt = interactionState(jobsDir, job.id).steering[0];
+  assert.equal(receipt.state, outcome === "missing" ? "dispatched" : "failed");
+  assert.equal(submitSteering({ jobsDir, jobId: job.id, message: "Correction", requestId: "one", allowNew: false }).reused, true);
+  assert.throws(() => submitSteering({ jobsDir, jobId: job.id, message: "Late correction", requestId: "late" }), /not queued/);
+});
+
+test("an idle backend without steering acknowledgements is bounded and never replayed", { timeout: 2000 }, async (t) => {
+  const { root, jobsDir } = fixture(t);
+  const job = { id: "idle-input", kind: "discuss", cwd: root, sessionId: "saved-session", request: { prompt: "Start" } };
+  let release, sends = 0;
+  const closed = new Promise((resolve) => { release = resolve; });
+  const queryImpl = ({ prompt }) => ({ close() { release(); }, async *[Symbol.asyncIterator]() {
+    const messages = prompt[Symbol.asyncIterator](); await messages.next();
+    submitSteering({ jobsDir, jobId: job.id, message: "Correction", requestId: "one" });
+    await messages.next(); sends++;
+    yield { ...success("Earlier answer"), queued_turn_count: 0 };
+    await closed;
+  } });
+  const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused",
+    outputFile: path.join(root, "output"), stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
+    onProgress() {}, queryImpl, pollMs: 1, steeringReceiptTimeoutMs: 20 });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.error.message, /acknowledgement timed out/);
+  assert.match(result.stdout, /Earlier answer/);
+  assert.equal(sends, 1);
+});
+
+test("closing steering cannot abandon an accepted command and rejects later input", (t) => {
+  const { jobsDir } = fixture(t);
+  assert.equal(sealSteering(jobsDir, "empty-job"), true);
+  assert.throws(() => submitSteering({ jobsDir, jobId: "empty-job", message: "Late", requestId: "one" }), /not queued/);
+  const command = { jobsDir, jobId: "active-job", message: "Accepted", requestId: "one" };
+  submitSteering(command);
+  assert.equal(sealSteering(jobsDir, "active-job"), false);
+  sealSteering(jobsDir, "active-job", true);
+  assert.equal(submitSteering(command).reused, true);
+  assert.throws(() => submitSteering({ ...command, requestId: "two" }), /not queued/);
 });
 
 for (const interrupt of [false, true]) test(`live input is delivered once with interrupt=${interrupt}`, async (t) => {
@@ -67,9 +168,10 @@ for (const interrupt of [false, true]) test(`live input is delivered once with i
     assert.equal(submitSteering(options).reused, false);
     assert.equal(submitSteering(options).reused, true);
     assert.throws(() => submitSteering({ ...options, message: "different" }), /different steering/);
-    assert.equal((await messages.next()).value.message.content, "Focus on timing");
-    yield { ...success("Original turn"), queued_turn_count: 1 };
-    yield { ...success("Steered turn"), queued_turn_count: 0 };
+    const steered = (await messages.next()).value;
+    assert.equal(steered.message.content, "Focus on timing");
+    yield { ...success("Original turn"), queued_turn_count: 1, terminal_reason: interrupt ? "aborted_streaming" : "completed" };
+    yield { ...success("Steered turn"), queued_turn_count: 0, user_message_uuid: steered.uuid };
   } });
   const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused",
     outputFile: path.join(root, "output"), stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
@@ -77,13 +179,13 @@ for (const interrupt of [false, true]) test(`live input is delivered once with i
   assert.equal(result.exitCode, 0);
   assert.equal(interrupts, interrupt ? 1 : 0);
   const receipt = interactionState(jobsDir, job.id).steering[0];
-  assert.equal(receipt.state, "dispatched");
+  assert.equal(receipt.state, "completed");
   assert.equal(receipt.mode, interrupt ? "interrupt" : "queued");
   assert.equal(receipt.incorporation, "unconfirmed");
   assert.match(result.stdout, /Steered turn/);
 });
 
-test("dispatched input can remain unconsumed until after the original answer", { timeout: 3000 }, async (t) => {
+test("a zero queue snapshot cannot drop input still crossing the SDK pipe", { timeout: 3000 }, async (t) => {
   const { root, jobsDir } = fixture(t);
   const outputFile = path.join(root, "output");
   const job = { id: "delayed-input", kind: "discuss", cwd: root, sessionId: "saved-session", request: { prompt: "Start" } };
@@ -100,10 +202,11 @@ test("dispatched input can remain unconsumed until after the original answer", {
     assert.equal(receipt.reused, true);
     assert.equal(receipt.state, "dispatched");
     assert.equal(receipt.incorporation, "unconfirmed");
-    yield { ...success("Original answer without the correction"), queued_turn_count: 1 };
+    yield { ...success("Original answer without the correction"), queued_turn_count: 0 };
     assert.equal(fs.readFileSync(outputFile, "utf8"), "Original answer without the correction");
-    assert.equal((await messages.next()).value.message.content, "Apply the correction");
-    yield { ...success("Follow-up answer with the correction"), queued_turn_count: 0 };
+    const steered = (await messages.next()).value;
+    assert.equal(steered.message.content, "Apply the correction");
+    yield { ...success("Follow-up answer with the correction"), queued_turn_count: 0, user_message_uuid: steered.uuid };
   } });
   const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused", outputFile,
     stderrFile: path.join(root, "stderr"), eventsFile: path.join(root, "events"),
@@ -111,6 +214,7 @@ test("dispatched input can remain unconsumed until after the original answer", {
   assert.equal(result.exitCode, 0, result.error?.message);
   assert.ok(result.stdout.indexOf("Original answer") < result.stdout.indexOf("Follow-up answer"));
   assert.equal(interactionState(jobsDir, job.id).steering[0].incorporation, "unconfirmed");
+  assert.equal(interactionState(jobsDir, job.id).steering[0].state, "completed");
 });
 
 test("live input folded into the active turn completes without waiting for a nonexistent second result", async (t) => {
@@ -120,8 +224,8 @@ test("live input folded into the active turn completes without waiting for a non
     const messages = prompt[Symbol.asyncIterator]();
     await messages.next();
     submitSteering({ jobsDir, jobId: job.id, message: "Fold this into the answer", requestId: "fold-one" });
-    await messages.next();
-    yield { ...success("Combined answer"), queued_turn_count: 0 };
+    const steered = (await messages.next()).value;
+    yield { ...success("Combined answer"), queued_turn_count: 0, user_message_uuids: [steered.uuid] };
     throw new Error("The bridge waited for a result that does not exist");
   } });
   const result = await runInteractive({ job, paths: { jobsDir, repoRoot: root }, binary: "unused",

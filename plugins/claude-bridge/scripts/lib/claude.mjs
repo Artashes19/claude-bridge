@@ -78,7 +78,7 @@ export function checkClaudeReadiness({
   };
 }
 
-export function buildReviewClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd }) {
+export function buildReviewClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd, autoCompactWindow = 400000 }) {
   return [
     "-p",
     "--model",
@@ -89,12 +89,12 @@ export function buildReviewClaudeArgs({ model, effort, prompt, sessionId, resume
     "",
     "--permission-mode",
     "plan",
-    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }),
+    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd, autoCompactWindow }),
     prompt
   ];
 }
 
-export function buildDelegateClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd }) {
+export function buildDelegateClaudeArgs({ model, effort, prompt, sessionId, resumeSessionId, maxBudgetUsd, autoCompactWindow = 400000, permissionMode = "acceptEdits" }) {
   return [
     "-p",
     "--model",
@@ -102,14 +102,15 @@ export function buildDelegateClaudeArgs({ model, effort, prompt, sessionId, resu
     "--effort",
     effort,
     "--permission-mode",
-    "acceptEdits",
-    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }),
+    permissionMode,
+    ...sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd, autoCompactWindow }),
     prompt
   ];
 }
 
-function sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd }) {
+function sessionArgs({ sessionId, resumeSessionId, maxBudgetUsd, autoCompactWindow }) {
   return [
+    "--autocompact", String(autoCompactWindow),
     ...(sessionId ? ["--output-format", "stream-json", "--verbose", "--include-partial-messages",
       ...(resumeSessionId ? ["--resume", resumeSessionId] : ["--session-id", sessionId])] : []),
     ...(maxBudgetUsd != null ? ["--max-budget-usd", String(maxBudgetUsd)] : []),

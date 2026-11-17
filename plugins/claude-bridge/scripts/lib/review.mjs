@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { runStoredJob } from "./execution.mjs";
 
 import { buildReviewClaudeArgs } from "./claude.mjs";
-import { resolveBudget, resolveEffort, resolveModel } from "./config.mjs";
+import { resolveAutoCompactWindow, resolveBudget, resolveEffort, resolveModel } from "./config.mjs";
 import { buildReviewInput } from "./git.mjs";
 import { createJobRecord, writeJobRecord } from "./jobs.mjs";
 import { loadPrompt, buildReviewPrompt } from "./prompts.mjs";
@@ -47,7 +47,8 @@ export function prepareReviewJob({
   const effort = resolveEffort({ requestedEffort, config });
   const session = sessionFields(null);
   const budget = resolveBudget(maxBudgetUsd, config);
-  const args = buildReviewClaudeArgs({ model, effort, prompt, sessionId: session.sessionId, maxBudgetUsd: budget });
+  const autoCompactWindow = resolveAutoCompactWindow(config);
+  const args = buildReviewClaudeArgs({ model, effort, prompt, sessionId: session.sessionId, maxBudgetUsd: budget, autoCompactWindow });
 
   const job = createJobRecord({
     kind: "review",
@@ -58,7 +59,7 @@ export function prepareReviewJob({
     request: { binary: null, args, prompt }
   });
   return Object.assign(job, session, conversationFields({ cwd, summary: job.summary, config, project, title, shareSession }),
-    { interactive: true, maxBudgetUsd: budget, settingsSource: {
+    { interactive: true, autoCompactWindow, maxBudgetUsd: budget, settingsSource: {
     model: requestedModel ? "request" : config.sources?.review ?? "built-in",
     effort: requestedEffort ? "request" : config.sources?.effort ?? "built-in",
   } });

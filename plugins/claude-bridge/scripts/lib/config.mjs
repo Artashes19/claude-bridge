@@ -3,6 +3,7 @@ import fs from "node:fs";
 export const DEFAULT_CONFIG = {
   models: {
     aliases: {
+      fable: "claude-fable-5-2",
       opus: "claude-opus-4-6",
       sonnet: "claude-sonnet-4-6",
       haiku: "claude-haiku-4-5-20251001"
@@ -15,6 +16,7 @@ export const DEFAULT_CONFIG = {
   runtime: {
     defaultEffort: "high",
     defaultBackground: false,
+    autoCompactWindow: 400000,
     claudeBinary: "claude"
   }
 };
@@ -92,6 +94,14 @@ export function resolveBudget(value, config) {
     throw new Error("maxBudgetUsd must be a positive number.");
   }
   return budget;
+}
+
+export function resolveAutoCompactWindow(config) {
+  const value = config.runtime?.autoCompactWindow ?? DEFAULT_CONFIG.runtime.autoCompactWindow;
+  if (!Number.isSafeInteger(value) || value < 100000 || value > 1000000) {
+    throw new Error("runtime.autoCompactWindow must be an integer between 100000 and 1000000 tokens.");
+  }
+  return value;
 }
 
 export function resolveClaudeBinary({ config, env = process.env }) {

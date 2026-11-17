@@ -10,6 +10,15 @@ import {
   resolveEffort,
   resolveModel
 } from "../plugins/claude-bridge/scripts/lib/config.mjs";
+import { resolveAutoCompactWindow } from "../plugins/claude-bridge/scripts/lib/config.mjs";
+
+test("compaction defaults to 400k and validates overrides before execution", () => {
+  assert.equal(resolveAutoCompactWindow(loadMergedConfig({})), 400000);
+  assert.equal(resolveAutoCompactWindow({ runtime: { autoCompactWindow: 250000 } }), 250000);
+  for (const value of [0, -1, 99999, 1000001, 400000.5, "400000", true]) {
+    assert.throws(() => resolveAutoCompactWindow({ runtime: { autoCompactWindow: value } }), /autoCompactWindow/);
+  }
+});
 
 test("loadMergedConfig uses repo config over global config", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bridge-config-"));
@@ -62,6 +71,12 @@ test("loadMergedConfig returns isolated config objects", () => {
   const secondConfig = loadMergedConfig({ repoConfigPath, globalConfigPath });
 
   assert.equal(secondConfig.runtime.defaultBackground, false);
+  for (const command of ["review", "delegate"]) {
+    assert.equal(
+      resolveModel({ command, requestedModel: "fable", config: secondConfig }),
+      "claude-fable-5-2"
+    );
+  }
 });
 
 test("resolveModel expands aliases and respects command defaults", () => {

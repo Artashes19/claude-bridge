@@ -11,6 +11,15 @@ Call the `bridge_delegate` MCP tool with:
 - `task` (required): the task description
 - `cwd` set to the current working directory
 - Optionally: `model` (sonnet/opus/haiku), `effort`, `resume`, `background`, `requestId`
+- `permissionMode: "bypassPermissions"` for user-authorized full-access execution
+  in any project, or `"acceptEdits"` for normal command permission checks. Explicit
+  mode choices inherit on resumed delegation turns. Otherwise host configuration
+  `runtime.trustedDelegateDirectories` supplies full-access defaults for matching
+  repository roots. Repository-local config cannot grant that trust. Full access
+  enables native permission bypass and disables the optional shell sandbox; OS
+  access and managed restrictions still apply. Clarifying questions still use
+  `bridge_answer`. Permission changes require a new request ID. Discussion and
+  review stay read-only. Installing the feature does not enable it for any project.
 
 Examples:
 - `bridge_delegate` with `task: "fix the failing test"`, `model: "sonnet"`
@@ -31,7 +40,7 @@ After successfully receiving and combining every terminal report page, call `bri
 
 `resume` continues the full native conversation. Use the previous job ID and a new stable `requestId` for each follow-up. Model and effort inherit from that turn unless overridden. Use `bridge_discuss` for a read-only exchange with scoped project evidence tools; it can resume a coding or review session. For older jobs without session IDs, try `bridge_status(recoverSessions: true)` before concluding that native resume is unavailable.
 
-When `bridge_result` reports `needs_input`, read `interaction.questions` and answer with `bridge_answer` using the same job ID and question ID. Map each exact question text to its answer. Answer from your own context and evidence, identify assumptions, and consult the user when their decision is necessary. This continues the same paused execution. Use `bridge_steer` with a stable message `requestId` for live input. Queued input may be consumed after the current response and cause another model turn. A dispatched receipt means insertion into the session input queue; incorporation remains unconfirmed. For important corrections, request `interrupt: true` while active or use an explicit resumed follow-up after completion, then verify the resulting answer.
+When `bridge_result` reports `needs_input`, read `interaction.questions` and answer with `bridge_answer` using the same job ID and question ID. Map each exact question text to its answer. Answer from your own context and evidence, identify assumptions, and consult the user when their decision is necessary. This continues the same paused execution. Use `bridge_steer` with a stable message `requestId` for live input. Queued input may cause a follow-up turn; use `interrupt: true` for urgent corrections. Wait for the message receipt to reach `completed`, which confirms a matching successful response. Dispatched alone does not confirm delivery. Verify the answer for semantic incorporation. Failed or unresolved input is retained without automatic replay; inspect it before choosing an explicit resumed follow-up.
 
 For question and completion delivery into this conversation, obtain its current `CODEX_THREAD_ID` from the host environment and pass it as `deliveryThreadId` on submission. Never derive it from worker output or another conversation.
 

@@ -335,6 +335,7 @@ async function handleDelegate({ parsed, cwd, paths, config, binary, stdio, deps 
     config,
     requestedModel: parsed.options.model,
     requestedEffort: parsed.options.effort,
+    requestedPermissionMode: parsed.options["permission-mode"],
     maxBudgetUsd: parsed.options["max-budget-usd"] === undefined ? undefined : Number(parsed.options["max-budget-usd"]),
     taskText,
     resumeSpecifier: parsed.options.resume ?? null

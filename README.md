@@ -6,10 +6,14 @@ It supports:
 
 - read-only code review
 - writable task delegation
+- opt-in full-access delegation and reusable trusted-project defaults
 - background jobs with status, result, and cancel
-- per-call model selection for `opus`, `sonnet`, `haiku`, or a full Claude model ID
+- per-call model selection for `fable`, `opus`, `sonnet`, `haiku`, or a full model ID
 
 ## Requirements
+
+For permission selection and host configuration, see
+[Delegation permissions](plugins/claude-bridge/README.md#delegation-permissions).
 
 - Codex installed locally
 - Claude Code installed locally
@@ -78,6 +82,25 @@ It supports:
 
 5. Restart Codex.
 
+## Update an existing checkout
+
+From the repository checkout on the computer running the bridge:
+
+```bash
+git pull --ff-only
+npm ci
+npm test
+```
+
+Reconnect the MCP server after updating. Version `0.7.0` is reported by
+`bridge_status.runtime.version`. Existing workers retain their loaded code until
+finished; new and resumed workers use the updated configuration.
+
+If the registered server uses a separate copy of `plugins/claude-bridge/`, refresh
+that copy using the original installation method as well. Updating a checkout
+alone does not update another installed copy. Host settings and session history
+are stored outside the source files.
+
 ## Verify
 
 Open Codex inside a Git repository and use the `claude-setup` skill.
@@ -124,6 +147,7 @@ Example:
 {
   "models": {
     "aliases": {
+      "fable": "claude-fable-5-2",
       "opus": "claude-opus-4-6",
       "sonnet": "claude-sonnet-4-6",
       "haiku": "claude-haiku-4-5-20251001"
@@ -136,6 +160,7 @@ Example:
   "runtime": {
     "defaultEffort": "high",
     "defaultBackground": false,
+    "autoCompactWindow": 400000,
     "claudeBinary": "claude"
   }
 }

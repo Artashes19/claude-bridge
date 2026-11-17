@@ -141,7 +141,7 @@ test('reconnected clients reuse one execution and retrieve every saved page', { 
     assert.equal(completedRetry.hasMore, true);
     assert.equal(fs.readFileSync(countFile, 'utf8'), 'launch\n');
     const runtime = await call(client, 'bridge_status', { cwd });
-    assert.equal(runtime.runtime.version, '0.6.0');
+    assert.equal(runtime.runtime.version, JSON.parse(fs.readFileSync('package.json', 'utf8')).version);
   } finally {
     await concurrentClient?.close();
     await client?.close();
@@ -210,19 +210,19 @@ import readline from 'node:readline';
 fs.appendFileSync(${JSON.stringify(launches)}, 'launch\\n');
 const send = (value) => console.log(JSON.stringify(value));
 const sessionId=process.argv.find((arg)=>arg.startsWith('--session-id='))?.slice('--session-id='.length);
-let started=false,steered=false;
+let started=false,steered=false,steeringUuid;
 readline.createInterface({input:process.stdin}).on('line',(line)=>{
  const message=JSON.parse(line);
  if(message.type==='control_request') {
   send({type:'control_response',response:{subtype:'success',request_id:message.request_id,response:{commands:[],models:[],account:{}}}});
  } else if(message.type==='user') {
-  if(started){steered=true;return;}
+  if(started){steered=true;steeringUuid=message.uuid;return;}
   started=true;
   send({type:'system',subtype:'init',session_id:sessionId,model:'fixture'});
   send({type:'control_request',request_id:'question-control',request:{subtype:'can_use_tool',tool_name:'AskUserQuestion',tool_use_id:'question-tool',input:{questions:[{question:'Which baseline?',header:'Baseline',multiSelect:false,options:[{label:'Accepted',description:'Current evidence'},{label:'Alternative',description:'Explore'}]}]}}});
  } else if(message.type==='control_response'&&message.response.request_id==='question-control') {
   const answer=message.response.response.updatedInput.answers['Which baseline?'];
-  send({type:'result',subtype:'success',is_error:false,session_id:sessionId,queued_turn_count:0,result:'Continued: '+answer+(steered?' | live input received':'')});
+  send({type:'result',subtype:'success',is_error:false,session_id:sessionId,queued_turn_count:0,user_message_uuid:steeringUuid,result:'Continued: '+answer+(steered?' | live input received':'')});
  }
 });
 
@@ -258,7 +258,7 @@ readline.createInterface({input:process.stdin}).on('line',(line)=>{
     assert.equal(completed.output, 'Continued: Accepted, based on my evidence | live input received');
     const retriedSteering = await call(client,'bridge_steer',steering);
     assert.equal(retriedSteering.reused,true,retriedSteering.error);
-    assert.equal(retriedSteering.state,'dispatched');
+    assert.equal(retriedSteering.state,'completed');
     const retriedAnswer = await call(client,'bridge_answer',{cwd,jobId:started.jobId,questionId,answers:{'Which baseline?':'Accepted, based on my evidence'}});
     assert.equal(retriedAnswer.reused,true,retriedAnswer.error);
     assert.equal(fs.readFileSync(launches, 'utf8'), 'launch\n');

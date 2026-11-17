@@ -24,6 +24,59 @@ Claude Bridge is a Codex plugin that shells out to the local `claude` CLI for:
 - These examples assume the plugin has been installed to ~/plugins/claude-bridge.
 - In `~/.agents/plugins/marketplace.json`, `./plugins/claude-bridge` resolves to `~/plugins/claude-bridge`.
 
+## Delegation permissions
+
+Full access is an opt-in option for any project. Set `permissionMode` on an
+authorized delegation request:
+
+```json
+{
+  "cwd": "/absolute/project",
+  "task": "Run the agreed experiment and save its report.",
+  "permissionMode": "bypassPermissions",
+  "background": true,
+  "requestId": "experiment-001"
+}
+```
+
+The command-line equivalent is `delegate --cwd /absolute/project
+--permission-mode bypassPermissions "Run the agreed experiment"` using the
+existing script entry point. `acceptEdits` selects automatic file edits with
+normal command checks. An explicit choice is inherited when resuming a delegate
+turn; pass `acceptEdits` to reduce it. A changed permission choice needs a new
+request ID. Discussion and review retain their read-only toolsets.
+
+For reusable defaults, add exact repository paths to the **host** configuration
+at `~/.claude-bridge/config.json`, preserving its other settings:
+
+```json
+{
+  "runtime": {
+    "trustedDelegateDirectories": ["/absolute/project-a", "/absolute/project-b"]
+  }
+}
+```
+
+Paths match canonical repository roots, including aliases of the same directory.
+Nested repositories and sibling projects are separate. Repository-local config
+cannot grant this trust. Defaults are checked again when a worker starts and on
+resume; removing a path affects subsequent turns that have no explicit override.
+Explicit per-call choices take precedence. The list grants a launch default,
+not a filesystem boundary, and does not edit the desktop application's trust store.
+
+Full access selects native `bypassPermissions`, enables
+`allowDangerouslySkipPermissions`, and disables the optional shell sandbox for
+that worker. File reads/writes and ordinary shell execution can proceed without
+interactive approvals within the operating-system account's access. Managed
+restrictions, deny/ask rules and mandatory interaction still apply; clarification
+questions continue through `bridge_answer`. See the
+[permission evaluation rules](https://code.claude.com/docs/en/agent-sdk/permissions).
+`permissions` in status/results shows the selected mode and source;
+`actualPermissionMode` records the backend's reported mode when available.
+
+Existing connections need a server reconnect to discover the new tool argument.
+No project or host default changes merely by installing this feature.
+
 ## Publishing
 
 This repo is structured so it can be pushed to GitHub and shared directly. After cloning, friends can install the plugin by copying `plugins/claude-bridge/` into `~/plugins/claude-bridge/` and registering the matching marketplace entry from `.agents/plugins/marketplace.json`.
@@ -73,9 +126,11 @@ CLI equivalents are `sessions [--all-repositories] [--project <topic>]` and `sha
 
 Use `bridge_discuss` with `message`, `cwd`, and a stable `requestId` to start a read-only conversation. After retrieving the reply, send the next message with `resume` set to the previous job ID and a new `requestId`. Earlier arguments and evidence remain in the native conversation. Discussion and review workers have scoped project read, search, and listing tools, plus clarifying questions; they have no shell or file-edit tools. A review or coding job can also supply the session for a discussion follow-up.
 
+Bridge workers use a **400,000-token automatic compaction window** by default. Set `runtime.autoCompactWindow` to an integer from 100,000 through 1,000,000 in host or repository configuration to override it; repository configuration takes precedence. The policy is read again when each new or resumed worker starts, without changing an already-running worker or unrelated desktop sessions. Native compaction runs at a safe turn boundary with its reserve: on the tested runtime a 400k policy triggers at roughly 367k, and smaller model windows cap the policy. Child-process settings enable native automatic compaction and override inherited compaction-window and percentage settings. No decision-record file or additional conversation summary is injected. Status and results expose `autoCompactWindow`; `context.inputTokens` includes cached input, and `context.lastCompaction` records the latest native boundary when available. These are separate from cumulative usage.
+
 New workers use a streaming SDK connection to the configured local executable. When the worker asks a clarifying question, `bridge_result` returns `status: needs_input` and `interaction.questions` immediately, even if a wait was requested. Call `bridge_answer` with `jobId`, the question's `id` as `questionId`, and `answers` mapping every exact question text to its answer. The host agent should answer from its own evidence and context, and consult the user only when necessary. Answers are saved independently of the connection and consumed by the same paused worker. Conflicting repeated answers are rejected. This channel does not grant additional tool permissions.
 
-Use `bridge_steer` with `jobId`, `message`, and a stable `requestId` to add input while a job runs. Input is queued by default and may be consumed after the current response, causing another model turn. `interrupt: true` requests interruption before queuing the message. `interaction.steering` exposes queued, dispatching, dispatched, and failed receipts, the requested `mode`, and `incorporation: unconfirmed`. A dispatched receipt proves insertion into the session input queue; it does not prove backend consumption or incorporation into the current answer. For important corrections, request interruption while active or use an explicit resumed follow-up after completion, then verify the resulting answer. A dispatch interrupted by a worker crash is uncertain and is not automatically replayed. Older jobs remain retrievable and resumable but do not acquire live controls until a new turn is started.
+Use `bridge_steer` with `jobId`, `message`, and a stable `requestId` to add input while a job runs. Queued input may produce a follow-up answer after the current response; `interrupt: true` requests interruption before sending an urgent correction. Receipts in `interaction.steering` advance from queued through dispatching, dispatched, responding, and completed (or failed). Each message carries a unique native message ID. A job cannot succeed until every accepted message has a matching successful response, including messages folded into one turn. Completed confirms a response to the message, while `incorporation: unconfirmed` means the host must still check whether the answer followed the correction. Responses expose message and result IDs for correlation. Late input is rejected once completion closes the input channel; retrying an existing request ID still returns its receipt. Missing acknowledgements, interrupted responses, or worker crashes retain the input and report failure instead of silently completing or automatically replaying paid work. If an idle backend reports an empty queue without acknowledging dispatched input, the worker waits up to 60 seconds for further response activity before reporting failure. Older jobs remain retrievable and resumable; these controls apply when a new worker starts.
 
 Bind delivery explicitly with the originating host session's `CODEX_THREAD_ID` as `deliveryThreadId`. The bridge discovers a single private app-server socket owned by the local user, or accepts its absolute path as `deliveryEndpoint`. It never infers a destination from another job or a shared server environment. Notifications steer an active host turn or start a continuation when idle; the host still retrieves and acknowledges the saved report. Pending notifications persist in a local delivery registry and are retried by the server after reconnecting. If delivery may have happened but acknowledgement was lost, `interaction.notifications` records `uncertain` and avoids automatic duplicate generation. Saved reports remain available regardless of notification delivery.
 
@@ -88,6 +143,8 @@ New runs save an event journal alongside the readable report and diagnostics. Re
 `bridge_status.pendingReports` lists saved reports that have not been acknowledged. Read terminal output from offset 0 through every `nextOffset`. After successfully receiving and combining all pages, call `bridge_result` again with `acknowledge: true` and `offset` equal to the final `nextOffset`. Serving a page alone does not confirm it reached the caller; acknowledgement records caller receipt, not that a person has read it.
 
 Model and effort selection follows an explicit request, then the previous turn when resuming, then repository configuration, global configuration, and built-in defaults. The built-in effort is `high`. Supported levels are `low`, `medium`, `high`, `xhigh`, and `max`; unsupported model/effort combinations fail with backend diagnostics. Result metadata identifies the setting source and actual model when supplied; there is no automatic model or effort substitution.
+
+Use `model: "fable"` for `claude-fable-5-2`, or supply the full model ID. The 5.2 model requires CLI version 2.1.321 or later ([version requirement](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)). Repository or global alias configuration can override this mapping. Model availability still depends on the connected account; the bridge never substitutes an older model after a failure.
 
 Optional `maxBudgetUsd`, or `runtime.maxBudgetUsd` in configuration, passes the backend's estimated spending limit for the current run. Follow-ups inherit the preceding turn's numeric cap unless overridden, but restored costs from earlier runs do not count toward that cap. This is not a conversation-wide spending limit and may overshoot. `estimatedApiEquivalentUsd` and `modelUsage` are conversation totals, including earlier turns; do not sum those totals across resumed jobs. Usage, list-price estimates, subscription allowances, and actual billing differ. No budget is imposed when neither a request, prior turn nor configuration supplies one. The bridge does not enforce an independent token or runtime cap.
 

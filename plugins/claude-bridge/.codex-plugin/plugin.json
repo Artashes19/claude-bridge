@@ -1,6 +1,6 @@
 {
   "name": "claude-bridge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Run local Claude Code review and delegation flows from Codex via MCP.",
   "author": {
     "name": "Artashes Mkrtchyan"

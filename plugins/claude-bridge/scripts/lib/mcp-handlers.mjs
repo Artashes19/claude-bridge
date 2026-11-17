@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { markRetrieved, reportDelivery, acknowledgeReport } from "./delivery.mjs";
 import { recoverJournal } from "./stream.mjs";
 import { recoverLegacySessions } from "./session-recovery.mjs";
-import { interactionState, submitAnswer, submitSteering } from "./interaction.mjs";
+import { interactionState, submitAnswer, submitSteering, unresolvedSteering } from "./interaction.mjs";
 import { resolveHostDelivery, watchDeliveryJob } from "./host-delivery.mjs";
 import { readPlanUsage, cachedPlanUsage, costMetadata, modelUsageMetadata } from "./usage.mjs";
 import { conversationFields, registerSessionRepository, sessionCatalog, sessionLabel } from "./catalog.mjs";
@@ -96,11 +96,14 @@ export function reconcileWorker(job, ctx, deps) {
   if (isTerminalJobStatus(latest.status)) return latest;
   let recovered = {};
   let recoveredSuccess = false;
+  const pendingSteering = unresolvedSteering(ctx.paths.jobsDir, job.id).length;
   if (latest.eventsFile && fs.existsSync(latest.eventsFile) && latest.outputFile) {
     const state = recoverJournal(latest);
     recovered = state.progress;
     recoveredSuccess = state.terminal?.subtype === "success" && !state.terminal.is_error && !state.parseErrors &&
-      fs.existsSync(latest.outputFile) && fs.statSync(latest.outputFile).size > 0;
+      (!state.terminal.terminal_reason || state.terminal.terminal_reason === "completed") &&
+      fs.existsSync(latest.outputFile) && fs.statSync(latest.outputFile).size > 0 &&
+      !(state.terminal.queued_turn_count > 0) && !pendingSteering;
   }
   let workerLog = "";
   if (latest.workerLogFile && fs.existsSync(latest.workerLogFile)) workerLog = readFileTail(latest.workerLogFile);
@@ -108,7 +111,7 @@ export function reconcileWorker(job, ctx, deps) {
     ...recovered, status: recoveredSuccess ? "completed" : "failed", ...(recoveredSuccess ? { exitCode: 0 } : {}),
     pid: null, backendPid: null, finishedAt: new Date().toISOString(),
     stderrTail: recoveredSuccess ? "Completion recovered from saved events without another execution." :
-      `${workerLog}\nWorker exited before recording completion. Saved output is retained; inspect it before submitting another paid request.`.trim().slice(-2000),
+      `${workerLog}\nWorker exited before recording completion. ${pendingSteering ? `${pendingSteering} steering message(s) have no confirmed successful response. ` : ""}Saved output is retained; inspect it before submitting another paid request.`.trim().slice(-2000),
   } });
 }
 
@@ -333,7 +336,7 @@ export async function handleReview({
 
 export async function handleDelegate({
   cwd, homeDir, model, effort, task, resume, background, requestId, maxBudgetUsd, deliveryThreadId, deliveryEndpoint,
-  project, title, shareSession, kind = "delegate", deps: injectedDeps,
+  project, title, shareSession, permissionMode, kind = "delegate", deps: injectedDeps,
 } = {}) {
   const deps = buildDeps(injectedDeps);
   const ctx = resolveContext({ cwd, homeDir, deps });
@@ -350,6 +353,7 @@ export async function handleDelegate({
   ensureStateDirs(ctx.paths);
 
   const key = intentKey(ctx, { kind, task, resume: resume ?? null, model: model ?? null, effort: effort ?? null,
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
     maxBudgetUsd: maxBudgetUsd ?? null, deliveryThreadId: deliveryThreadId ?? null,
     project: sessionLabel(project, "project", 120) ?? null, title: sessionLabel(title, "title", 200) ?? null,
     shareSession: shareSession ?? null });
@@ -362,6 +366,7 @@ export async function handleDelegate({
     config: ctx.config,
     requestedModel: model,
     requestedEffort: effort,
+    requestedPermissionMode: permissionMode,
     maxBudgetUsd, kind,
     project, title, shareSession,
     taskText: task,
@@ -372,7 +377,8 @@ export async function handleDelegate({
   job.request.intentKey = key;
   job.hostDelivery = resolveHostDelivery(deliveryThreadId, deliveryEndpoint);
   if (job.hostDelivery) job.hostDelivery.registryDir = path.join(homeDir || os.homedir(), ".claude-bridge", "delivery");
-  const reused = reuseSubmission({ ctx, deps, job, requestId, input: { task, resume: resume ?? null, maxBudgetUsd: job.maxBudgetUsd } });
+  const reused = reuseSubmission({ ctx, deps, job, requestId, input: { task, resume: resume ?? null, maxBudgetUsd: job.maxBudgetUsd,
+    ...(job.permissionMode ? { permissionMode: job.permissionMode } : {}) } });
   if (reused) return reused;
   registerSessionRepository(ctx.paths);
   const claimed = enqueueSubmission({ ctx, job, requestId, enqueue: enqueueDelegateJob });
@@ -445,7 +451,7 @@ export async function handleStatus({ cwd, homeDir, recoverSessions = false, incl
   }) : null;
   const jobs = listJobRecords({ jobsDir: ctx.paths.jobsDir }).map((job) => reconcileWorker(job, ctx, deps));
   return {
-    runtime: { version: "0.6.0", pid: process.pid },
+    runtime: { version: "0.7.0", pid: process.pid },
     planUsage: cachedPlanUsage(ctx),
     ...(sessionRecovery ? { sessionRecovery } : {}),
     pendingReports: jobs.filter((j) => isTerminalJobStatus(j.status) && j.outputFile &&
@@ -457,6 +463,10 @@ export async function handleStatus({ cwd, homeDir, recoverSessions = false, incl
       model: j.model,
       effort: j.effort,
       actualModel: j.actualModel ?? null,
+      autoCompactWindow: j.autoCompactWindow ?? null,
+      context: j.context ?? null,
+      permissions: j.permissions ?? null,
+      actualPermissionMode: j.actualPermissionMode ?? null,
       settingsSource: j.settingsSource ?? null,
       sessionId: j.sessionId ?? null,
       project: j.project ?? null,
@@ -551,6 +561,10 @@ export async function handleResult({ cwd, homeDir, jobId, offset = 0, maxBytes =
     model: job.model,
     effort: job.effort,
     actualModel: job.actualModel ?? null,
+    autoCompactWindow: job.autoCompactWindow ?? null,
+    context: job.context ?? null,
+    permissions: job.permissions ?? null,
+    actualPermissionMode: job.actualPermissionMode ?? null,
     settingsSource: job.settingsSource ?? null,
     sessionId: job.sessionId ?? null,
     project: job.project ?? null,
@@ -616,7 +630,7 @@ export async function handleSteer({ cwd, homeDir, jobId, message, requestId, int
     const job = reconcileWorker(resolveJobRecord({ jobsDir: ctx.paths.jobsDir, jobIdOrLatest: jobId }), ctx, deps);
     if (!job.interactive) throw new Error("This older job does not support live steering.");
     return { jobId: job.id, ...submitSteering({ jobsDir: ctx.paths.jobsDir, jobId: job.id, message, requestId, interrupt, allowNew: !isTerminalJobStatus(job.status) }),
-      nextAction: "Inspect interaction.steering and the resulting answer in bridge_result. Dispatched means added to the session input queue; incorporation is unconfirmed. Important corrections need interruption while active or an explicit resumed follow-up after completion, followed by checking the answer. Reuse the original requestId for retries." };
+      nextAction: "Retrieve this same job with bridge_result. Each accepted message must reach state completed with a matching response before the job succeeds. Queued messages may produce a follow-up answer. Check the answer for semantic incorporation; unresolved messages are retained and never automatically replayed. Reuse the original requestId for retries." };
   } catch (error) { return { error: error.message }; }
 }
 
